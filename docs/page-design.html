@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutomationKit 目录页设计文档</title>
+<style>
+  :root {
+    --bg: #0f172a; --bg-soft: #1e293b; --bg-3: #334155; --bg-deep: #0b1220;
+    --line: #334155; --border: #475569;
+    --text: #e2e8f0; --dim: #94a3b8; --faint: #64748b; --head: #f1f5f9;
+    --blue: #60a5fa; --green: #4ade80; --orange: #fb923c; --red: #f87171;
+    --cyan: #67e8f9; --purple: #c4b5fd;
+    --mono: Consolas, "Courier New", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; color-scheme: dark; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 16px; line-height: 1.8;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 32px 80px; }
+
+  aside.toc {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 256px;
+    background: var(--bg-soft); border-left: 1px solid var(--border);
+    overflow-y: auto; padding: 26px 20px;
+  }
+  aside.toc .toc-title { font-size: 13px; letter-spacing: 2px; color: var(--faint); text-transform: uppercase; margin-bottom: 14px; }
+  aside.toc a { display: block; color: var(--dim); text-decoration: none; font-size: 14px; padding: 4px 0 4px 10px; border-left: 2px solid transparent; }
+  aside.toc a:hover { color: var(--head); }
+  aside.toc a.active { color: var(--blue); border-left-color: var(--blue); }
+  aside.toc .grp { margin: 16px 0 6px; font-size: 12.5px; color: var(--faint); letter-spacing: 1px; }
+  @media (min-width: 1420px) { body { padding-right: 256px; } }
+  @media (max-width: 1419px) { aside.toc { display: none; } }
+
+  header.hero { padding: 48px 0 20px; border-bottom: 2px solid var(--border); margin-bottom: 8px; }
+  header.hero h1 { font-size: clamp(26px, 3vw, 34px); font-weight: 700; color: var(--head); letter-spacing: .5px; }
+  header.hero .sub { margin-top: 8px; font-size: 15px; color: var(--blue); font-weight: 600; }
+  header.hero .meta { margin-top: 10px; font-size: 14px; color: var(--faint); }
+
+  section { padding: 34px 0 6px; scroll-margin-top: 20px; }
+  h2 { font-size: 20px; font-weight: 700; color: var(--head); border-left: 4px solid var(--blue); padding-left: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+  h3 { font-size: 16.5px; font-weight: 700; color: var(--head); border-left: 3px solid var(--faint); padding-left: 10px; margin: 22px 0 10px; }
+  p { font-size: 15.5px; margin-bottom: 10px; }
+  p.dim { color: var(--dim); font-size: 15px; }
+  b, strong { color: var(--head); font-weight: 700; }
+  code { font-family: var(--mono); font-size: 14px; background: var(--bg-deep); border: 1px solid var(--line); padding: 1px 5px; color: #cbd5e1; }
+  ul { list-style: none; margin: 6px 0 12px; }
+  ul li { font-size: 15.5px; padding: 3px 0 3px 16px; position: relative; }
+  ul li::before { content: "–"; position: absolute; left: 0; color: var(--faint); }
+
+  .card { background: var(--bg-soft); border-left: 4px solid var(--blue); padding: 14px 18px; margin: 14px 0; }
+  .card p:last-child { margin-bottom: 0; }
+  .card.warn { border-left-color: var(--orange); }
+  .card.ok { border-left-color: var(--green); }
+  blockquote { background: var(--bg-soft); border-left: 4px solid var(--orange); padding: 12px 18px; margin: 14px 0; font-size: 15px; }
+  pre { background: var(--bg-deep); border-left: 4px solid var(--bg-3); padding: 12px 16px; margin: 12px 0; overflow-x: auto; font-family: var(--mono); font-size: 13px; color: #cbd5e1; line-height: 1.65; }
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-3); color: var(--head); font-weight: 700; }
+  td.c, th.c { text-align: center; }
+  td.key { font-family: var(--mono); font-size: 13.5px; color: var(--cyan); white-space: nowrap; }
+
+  .sw { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: 1px; }
+
+  footer { text-align: center; color: var(--faint); font-size: 13px; padding: 40px 0 10px; border-top: 1px solid var(--line); margin-top: 40px; }
+
+  @media print {
+    :root {
+      --bg: #ffffff; --bg-soft: #f8f9fa; --bg-3: #eceff3; --bg-deep: #f3f4f6;
+      --line: #d0d5dd; --border: #98a2b3;
+      --text: #1f2328; --dim: #57606a; --faint: #6b7280; --head: #111418;
+      --blue: #1d4ed8; --green: #15803d; --orange: #b45309; --red: #b91c1c;
+      --cyan: #0e7490; --purple: #6d28d9;
+    }
+    @page { size: A4; margin: 14mm 15mm; }
+    html { color-scheme: light; }
+    body { background: #fff; color: #1f2328; padding-right: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    aside.toc { display: none; }
+    header.hero { border-bottom: 2px solid #111; padding-top: 0; }
+    h2 { border-left-color: #111; }
+    .card, blockquote, pre { background: #f8f9fa; border-color: #d0d5dd; }
+    pre { background: #f3f4f6; }
+    th { background: #eceff3; }
+    table, pre, .card { page-break-inside: avoid; }
+    section { padding: 16px 0 2px; }
+  }
+</style>
+</head>
+<body>
+
+<aside class="toc">
+  <div class="toc-title">目录</div>
+  <a href="#goal">页面定位</a>
+  <a href="#ia">信息架构</a>
+  <a href="#wire">线框</a>
+  <a href="#color">配色与语义</a>
+  <a href="#card">模板卡片字段规范</a>
+  <a href="#type">字号与间距</a>
+  <a href="#ix">交互规范</a>
+  <a href="#print">打印规范</a>
+  <a href="#check">验收清单</a>
+</aside>
+
+<div class="wrap">
+
+<header class="hero">
+  <h1>AutomationKit 目录页设计文档</h1>
+  <div class="sub">site/templates.html · 给潜在客户看的模板目录页</div>
+  <div class="meta">版本 0.1.0 ｜ 2026-11-01 ｜ 单文件静态页，无构建、无外部依赖</div>
+</header>
+
+<section id="goal">
+  <h2>页面定位</h2>
+  <p>这不是营销落地页，是<b>产品目录</b>。客户打开后要在 30 秒内回答三个问题：</p>
+  <table>
+    <thead><tr><th class="c">#</th><th>客户心里的话</th><th>页面哪一部分回答</th></tr></thead>
+    <tbody>
+      <tr><td class="c">1</td><td>有哪些现成模板？</td><td>顶部总览表，6 行一屏看完</td></tr>
+      <tr><td class="c">2</td><td>我要的那类工作流在不在里面？</td><td>模板卡片的一句话作用描述</td></tr>
+      <tr><td class="c">3</td><td>装起来麻烦吗？要花多少钱？</td><td>总览表「需要付费账号」列 + 三步导入章节</td></tr>
+    </tbody>
+  </table>
+  <div class="card warn">
+    <p><b>刻意不做的事</b>：不放客户 logo 墙、不放 testimonials（还没有）、不放价格表（价格在 Upwork 服务包里，不在这页）。这一档（$95–$380）的客户看的是「能不能用」，不是品牌故事。</p>
+  </div>
+</section>
+
+<section id="ia">
+  <h2>信息架构</h2>
+  <table>
+    <thead><tr><th class="c">顺序</th><th>区块</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td class="c">1</td><td>文档头</td><td>标题 + 一行副标题（6 个模板 / 含重试与错误处理）+ 版本与运行时信息</td></tr>
+      <tr><td class="c">2</td><td>模板总览</td><td>6 行表格：模板 / 触发 / 依赖服务 / 是否要付费账号 / 是否含错误分支</td></tr>
+      <tr><td class="c">3</td><td>Webhook 类（3 个）</td><td>lead-routing、support-triage、invoice-parsing</td></tr>
+      <tr><td class="c">4</td><td>定时类（3 个）</td><td>rss-summary、sheets-notion-sync、daily-digest</td></tr>
+      <tr><td class="c">5</td><td>三步导入</td><td>起环境 / 导入 JSON / 填凭证并激活</td></tr>
+      <tr><td class="c">6</td><td>三条工程契约</td><td>重试 / 错误分支 / 幂等——这是差异化卖点，放最后收尾</td></tr>
+    </tbody>
+  </table>
+  <p class="dim">分组依据是<b>触发方式</b>而不是业务领域。客户找模板时先想到「我是定时跑还是被事件触发」，这与他们的心智模型一致。</p>
+</section>
+
+<section id="wire">
+  <h2>线框</h2>
+<pre>┌──────────────────────────────────────────────────────────┐  ┌──────────┐
+│ AutomationKit 模板目录                       [h1]        │  │ 目录      │
+│ 6 个可导入的 n8n 工作流 · 含重试/错误分支/幂等  [sub]     │  │ 模板总览  │
+│ 版本 0.1.0 ｜ 2026-11-01 ｜ n8n 2.45.0          [meta]   │  │ ─ Webhook │
+├──────────────────────────────────────────────────────────┤  │ lead-...  │
+│ 模板总览                                                  │  │ support-..│
+│ ┌────────┬────────┬──────────┬────────┬────────┐        │  │ invoice-..│
+│ │ 模板   │ 触发   │ 依赖服务 │ 付费?  │ 错误?  │        │  │ ─ 定时     │
+│ ├────────┼────────┼──────────┼────────┼────────┤        │  │ rss-...   │
+│ │ 6 行…                                 │        │        │  │ sheets-.. │
+│ └────────┴────────┴──────────┴────────┴────────┘        │  │ daily-... │
+├──────────────────────────────────────────────────────────┤  │ ─ 使用    │
+│ ▎lead-routing · 客户线索分发            [4px 蓝左条]      │  │ 三步导入  │
+│          一句话作用                                       │  │ 三条契约  │
+│          触发 / 凭证 / 失败行为 / 去重粒度                │  │           │
+├──────────────────────────────────────────────────────────┤  │ 256px     │
+│ ▎rss-summary · RSS 摘要入库            [4px 青左条]      │  │ 固定      │
+│          …                                                │  │           │
+└──────────────────────────────────────────────────────────┘  └──────────┘
+       ← 1100px 内容区 →                                       右侧固定</pre>
+  <p class="dim">内容区 1100px 居中；窗口 ≤1419px 时右侧目录隐藏，内容单栏自适应。</p>
+</section>
+
+<section id="color">
+  <h2>配色与语义</h2>
+  <h3>底色与文字（沿用项目既有规范）</h3>
+  <table>
+    <thead><tr><th>用途</th><th>色值</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>页面底</td><td><span class="sw" style="background:#0f172a;border:1px solid #475569"></span><code>#0f172a</code></td><td>整体背景</td></tr>
+      <tr><td>次级面</td><td><span class="sw" style="background:#1e293b;border:1px solid #475569"></span><code>#1e293b</code></td><td>卡片、右侧目录</td></tr>
+      <tr><td>三级面</td><td><span class="sw" style="background:#334155"></span><code>#334155</code></td><td>表头、分割线</td></tr>
+      <tr><td>凹陷面</td><td><span class="sw" style="background:#0b1220;border:1px solid #334155"></span><code>#0b1220</code></td><td>代码块、行内代码</td></tr>
+      <tr><td>正文</td><td><span class="sw" style="background:#e2e8f0"></span><code>#e2e8f0</code></td><td>不用纯白，避免刺眼</td></tr>
+      <tr><td>标题</td><td><span class="sw" style="background:#f1f5f9"></span><code>#f1f5f9</code></td><td>只比正文亮一档</td></tr>
+      <tr><td>次要</td><td><span class="sw" style="background:#94a3b8"></span><code>#94a3b8</code></td><td>说明文字</td></tr>
+      <tr><td>弱化</td><td><span class="sw" style="background:#64748b"></span><code>#64748b</code></td><td>元信息、页脚</td></tr>
+    </tbody>
+  </table>
+
+  <h3>触发类型色（唯一有语义的颜色）</h3>
+  <table>
+    <thead><tr><th>触发方式</th><th>左条颜色</th><th>用在哪</th></tr></thead>
+    <tbody>
+      <tr><td>Webhook</td><td><span class="sw" style="background:#60a5fa"></span><code>#60a5fa</code> 蓝</td><td>lead-routing、support-triage、invoice-parsing</td></tr>
+      <tr><td>定时</td><td><span class="sw" style="background:#67e8f9"></span><code>#67e8f9</code> 青</td><td>rss-summary、sheets-notion-sync、daily-digest</td></tr>
+      <tr><td>邮件</td><td><span class="sw" style="background:#c4b5fd"></span><code>#c4b5fd</code> 紫</td><td>预留。invoice-parsing 默认为 Webhook，客户换成邮件触发时该条目改用紫色</td></tr>
+    </tbody>
+  </table>
+  <p class="dim">除上述三种触发色，页面只用灰阶。橙色（<code>#fb923c</code>）仅用于警示卡（如「建议先跑 daily-digest」）。</p>
+</section>
+
+<section id="card">
+  <h2>模板卡片字段规范</h2>
+  <p>6 张卡片字段顺序<b>完全一致</b>，方便客户横向比对。每张卡必须能回答：它干什么、怎么触发、要什么凭证、失败了会怎样。</p>
+  <table>
+    <thead><tr><th class="c">序</th><th>字段</th><th>写法要求</th></tr></thead>
+    <tbody>
+      <tr><td class="c">1</td><td>标题（h3）</td><td>「模板名 · 中文名」格式，如 <code>lead-routing · 客户线索分发</code></td></tr>
+      <tr><td class="c">2</td><td>一句话作用</td><td>主谓宾齐全，不用形容词。如「表单来一条线索，去重后写进 CRM，同时通知销售群」</td></tr>
+      <tr><td class="c">3</td><td>副行（tagline）</td><td>三个卖点用 · 分隔，如「Webhook 触发 · 失败自动重试 3 次 · 同一条线索永不被处理两次」</td></tr>
+      <tr><td class="c">4</td><td>触发</td><td>给出确切的 URL 与 body 字段名</td></tr>
+      <tr><td class="c">5</td><td>需要的凭证</td><td>逐项列清；自带的说「自带」</td></tr>
+      <tr><td class="c">6</td><td><b>失败时会发生什么</b></td><td>必须写具体行为，不能写「会自动重试」了事。要写清：重试几次、失败后进哪张表、有没有数据丢失</td></tr>
+      <tr><td class="c">7</td><td>判断/去重规则</td><td>去重粒度、置信度阈值、单向还是双向——这是客户最可能追问的点</td></tr>
+    </tbody>
+  </table>
+  <div class="card ok">
+    <p><b>第 6 项是本页的核心竞争力</b>。市面上模板包几乎都不写「失败时会发生什么」，而客户真正被坑过的正是这一点。这一栏写得越具体，报价越站得住。</p>
+  </div>
+</section>
+
+<section id="type">
+  <h2>字号与间距</h2>
+  <table>
+    <thead><tr><th>元素</th><th>字号</th><th>字重</th><th>其他</th></tr></thead>
+    <tbody>
+      <tr><td>h1</td><td>26–34px（clamp）</td><td>700</td><td>底部 2px 描边</td></tr>
+      <tr><td>h2</td><td>20px</td><td>700</td><td>左 4px 蓝条 + 底细线，下间距 16px</td></tr>
+      <tr><td>h3</td><td>17px</td><td>700</td><td>卡片内标题</td></tr>
+      <tr><td>正文</td><td>15.5px</td><td>400</td><td>行高 1.8</td></tr>
+      <tr><td>表格</td><td>14.5px</td><td>400</td><td>单元格内边距 8×12</td></tr>
+      <tr><td>代码</td><td>13.5px</td><td>400</td><td>等宽字体，底 <code>#0b1220</code></td></tr>
+      <tr><td>页脚</td><td>13px</td><td>400</td><td>弱化色</td></tr>
+    </tbody>
+  </table>
+  <p class="dim">区块之间间距 34px；卡片上下外边距 14px；表格上下 14px。全站不使用圆角、阴影、渐变。</p>
+</section>
+
+<section id="ix">
+  <h2>交互规范</h2>
+  <table>
+    <thead><tr><th>交互</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td>右侧目录点击</td><td>平滑滚动到对应锚点；<code>scroll-margin-top: 20px</code> 防止标题被顶部裁掉</td></tr>
+      <tr><td>滚动高亮</td><td>随滚动更新当前章节（判定线为视口顶部 +120px）</td></tr>
+      <tr><td>目录悬停</td><td>文字由次要色变标题色，无位移、无动画</td></tr>
+      <tr><td>窄屏</td><td>≤1419px 隐藏右侧目录，内容单栏</td></tr>
+      <tr><td>外部链接</td><td>本页暂无外链；若后续添加 n8n 文档链接，需 <code>target="_blank" rel="noopener"</code> 并加 <code>↗</code> 标记</td></tr>
+    </tbody>
+  </table>
+  <div class="card warn">
+    <p><b>不用悬浮动画与渐变</b>：这是 B2B 工具目录页，客户的注意力应该全部落在「失败时会怎样」这些文字上，而不是界面特效上。</p>
+  </div>
+</section>
+
+<section id="print">
+  <h2>打印规范</h2>
+  <ul>
+    <li>A4 竖版，页边距 14mm × 15mm</li>
+    <li>整体反色：白底黑字，<code>color-scheme: light</code> + <code>print-color-adjust: exact</code></li>
+    <li>右侧目录自动隐藏，内容区取消右内边距</li>
+    <li>表格、卡片、代码块禁止跨页断行（<code>page-break-inside: avoid</code>）</li>
+    <li>打印后可直接作为报价附件发给客户</li>
+  </ul>
+</section>
+
+<section id="check">
+  <h2>验收清单</h2>
+  <table>
+    <thead><tr><th>检查项</th><th class="c">标准</th></tr></thead>
+    <tbody>
+      <tr><td>打开即深色</td><td class="c">若白底黑字说明 <code>:root</code> 写错（历史踩坑）</td></tr>
+      <tr><td>右侧 8 个目录项全部可跳转</td><td class="c">点击后标题不被裁切</td></tr>
+      <tr><td>滚动时目录高亮跟随</td><td class="c">当前项为蓝色左边条</td></tr>
+      <tr><td>6 张卡片字段顺序一致</td><td class="c">7 个字段齐全，无一遗漏</td></tr>
+      <tr><td>每张卡片都写了「失败时会发生什么」</td><td class="c">且具体到表名与次数</td></tr>
+      <tr><td>Ctrl+P 预览</td><td class="c">反色为白底黑字、目录隐藏、表格不断裂</td></tr>
+      <tr><td>≤1419px 窗口</td><td class="c">目录消失，内容单栏无横向滚动</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer>AutomationKit 目录页设计文档 · 2026-11-01 · 对应 site/templates.html · 单文件静态页</footer>
+
+</div>
+
+<script>
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('aside.toc a'));
+  var targets = links.map(function (a) { return document.querySelector(a.getAttribute('href')); });
+  function highlight() {
+    var pos = window.scrollY + 120;
+    var idx = 0;
+    for (var i = 0; i < targets.length; i++) {
+      if (targets[i] && targets[i].offsetTop <= pos) { idx = i; }
+    }
+    links.forEach(function (a, i) { a.classList.toggle('active', i === idx); });
+  }
+  window.addEventListener('scroll', highlight, { passive: true });
+  window.addEventListener('resize', highlight);
+  highlight();
+  links.forEach(function (a) { a.addEventListener('click', function () { setTimeout(highlight, 400); }); });
+})();
+</script>
+
+</body>
+</html>

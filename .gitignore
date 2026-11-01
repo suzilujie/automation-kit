@@ -1,0 +1,13 @@
+# local secrets
+.env
+
+# docker runtime data (never commit)
+n8n_data/
+pg_data/
+
+# runtime logs are ignored, but the work journal is tracked
+*.log
+!work-*.log
+
+# 6.7 MB research export that happens to sit in the project root
+第一梯队*.json

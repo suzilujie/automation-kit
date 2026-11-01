@@ -1,0 +1,248 @@
+{
+  "name": "AutomationKit - Lead Routing",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Lead Routing\n\nWebhook -> dedupe -> CRM -> Slack.\n\n**Duplicate protection**: the same email + source can only be processed once (processed_keys).\n\n**Failure behaviour**: CRM and Slack calls retry 3 times; if they still fail, the error branch writes one row into workflow_errors. Nothing fails silently.\n\n**Before activating**: set your CRM URL in `Push to CRM` and pick a Slack credential in `Notify Sales`, plus a Postgres credential on the two SQL nodes.",
+        "height": 260,
+        "width": 430,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-260, 40],
+      "id": "lr-sticky",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-routing",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "id": "lr-webhook",
+      "name": "Lead In",
+      "webhookId": "lead-routing"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalise the incoming lead and build a stable dedupe key.\n// eventId = email + source, so the same person from two channels still gets two records\n// but a retried webhook never creates a second one.\nreturn items.map((item) => {\n  const body = item.json.body || item.json;\n  const email = String(body.email || '').trim().toLowerCase();\n  const source = String(body.source || 'unknown').trim().toLowerCase();\n\n  if (!email) {\n    throw new Error('Missing email field - cannot build a dedupe key');\n  }\n\n  return {\n    json: {\n      eventId: email + '::' + source,\n      email,\n      company: body.company || '',\n      source,\n      receivedAt: new Date().toISOString(),\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "id": "lr-normalise",
+      "name": "Normalise Lead"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO processed_keys (key, workflow, payload, status)\nVALUES ($1, $2, $3::jsonb, 'claimed')\nON CONFLICT (key) DO UPDATE\n  SET status = 'claimed',\n      updated_at = now()\n  WHERE processed_keys.status <> 'done'\n    AND processed_keys.updated_at < now() - interval '10 minutes'\nRETURNING key, payload",
+        "options": {
+          "queryReplacement": "={{ $json.eventId }}, {{ $workflow.name }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [440, 300],
+      "id": "lr-claim",
+      "name": "Claim Key",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_CRM_DOMAIN/api/leads",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ email: $json.email, company: $json.company, source: $json.source }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "id": "lr-crm",
+      "name": "Push to CRM",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0000000000",
+          "mode": "id"
+        },
+        "text": "=New lead: {{ $('Normalise Lead').item.json.email }} from {{ $('Normalise Lead').item.json.source }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1100, 300],
+      "id": "lr-slack",
+      "name": "Notify Sales",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_errors (workflow, node, message, payload)\nVALUES ($1, $2, $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ $workflow.name }}, {{ $prevNode.name }}, {{ ($json.error && $json.error.message) || 'request failed' }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1100, 540],
+      "id": "lr-error",
+      "name": "Log Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE processed_keys\nSET status = 'done',\n    updated_at = now()\nWHERE key = $1\nRETURNING key",
+        "options": {
+          "queryReplacement": "={{ $('Claim Key').first().json.key }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1320, 300],
+      "id": "lead-routing-done",
+      "name": "Mark Done",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Two jobs, both required:\n//  1. Stop the run when the key is already taken. A Postgres node that gets 0 rows emits\n//     { success: true } instead of an empty output, so filtering is what actually stops it.\n//  2. Put the original payload back. The claim node outputs the SQL row, so without this\n//     every downstream node would read fields that no longer exist.\nreturn items\n  .filter((item) => item.json && item.json.key)\n  .map((item) => ({\n    json: Object.assign({}, item.json.payload || {}, { claimKey: item.json.key }),\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "id": "lead-routing-gate",
+      "name": "Claimed?"
+    }
+  ],
+  "connections": {
+    "Lead In": {
+      "main": [
+        [
+          {
+            "node": "Normalise Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Lead": {
+      "main": [
+        [
+          {
+            "node": "Claim Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Key": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Push to CRM": {
+      "main": [
+        [
+          {
+            "node": "Notify Sales",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Sales": {
+      "main": [
+        [
+          {
+            "node": "Mark Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Done": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "Push to CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {}
+}

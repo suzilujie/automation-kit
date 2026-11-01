@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutomationKit 可靠性保障</title>
+<style>
+  :root {
+    --bg: #0f172a; --bg-soft: #1e293b; --bg-3: #334155; --bg-deep: #0b1220;
+    --line: #334155; --border: #475569;
+    --text: #e2e8f0; --dim: #94a3b8; --faint: #64748b; --head: #f1f5f9;
+    --blue: #60a5fa; --green: #4ade80; --orange: #fb923c; --red: #f87171;
+    --cyan: #67e8f9; --purple: #c4b5fd;
+    --mono: Consolas, "Courier New", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; color-scheme: dark; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 16px; line-height: 1.8;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 32px 80px; }
+
+  aside.toc {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 256px;
+    background: var(--bg-soft); border-left: 1px solid var(--border);
+    overflow-y: auto; padding: 26px 20px;
+  }
+  aside.toc .toc-title { font-size: 13px; letter-spacing: 2px; color: var(--faint); text-transform: uppercase; margin-bottom: 14px; }
+  aside.toc a { display: block; color: var(--dim); text-decoration: none; font-size: 14px; padding: 4px 0 4px 10px; border-left: 2px solid transparent; }
+  aside.toc a:hover { color: var(--head); }
+  aside.toc a.active { color: var(--blue); border-left-color: var(--blue); }
+  aside.toc .grp { margin: 16px 0 6px; font-size: 12.5px; color: var(--faint); letter-spacing: 1px; }
+  @media (min-width: 1420px) { body { padding-right: 256px; } }
+  @media (max-width: 1419px) { aside.toc { display: none; } }
+
+  header.hero { padding: 48px 0 20px; border-bottom: 2px solid var(--border); margin-bottom: 8px; }
+  header.hero h1 { font-size: clamp(26px, 3vw, 34px); font-weight: 700; color: var(--head); letter-spacing: .5px; }
+  header.hero .sub { margin-top: 8px; font-size: 15px; color: var(--blue); font-weight: 600; }
+  header.hero .meta { margin-top: 10px; font-size: 14px; color: var(--faint); }
+
+  section { padding: 34px 0 6px; scroll-margin-top: 20px; }
+  h2 { font-size: 20px; font-weight: 700; color: var(--head); border-left: 4px solid var(--blue); padding-left: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+  h3 { font-size: 16.5px; font-weight: 700; color: var(--head); border-left: 3px solid var(--faint); padding-left: 10px; margin: 22px 0 10px; }
+  h4 { font-size: 15.5px; font-weight: 700; color: var(--head); margin: 0 0 4px; }
+  p { font-size: 15.5px; margin-bottom: 10px; }
+  p.dim { color: var(--dim); font-size: 15px; }
+  p.faint { color: var(--faint); font-size: 14px; }
+  b, strong { color: var(--head); font-weight: 700; }
+  .en { font-family: var(--mono); font-size: 12.5px; color: var(--faint); font-weight: 400; }
+  code { font-family: var(--mono); font-size: 14px; background: var(--bg-deep); border: 1px solid var(--line); padding: 1px 5px; color: #cbd5e1; }
+  ul { list-style: none; margin: 6px 0 12px; }
+  ul li { font-size: 15.5px; padding: 3px 0 3px 16px; position: relative; }
+  ul li::before { content: "–"; position: absolute; left: 0; color: var(--faint); }
+  ol { margin: 6px 0 12px 22px; }
+  ol li { font-size: 15.5px; padding: 3px 0; }
+
+  .card { background: var(--bg-soft); border-left: 4px solid var(--blue); padding: 14px 18px; margin: 14px 0; }
+  .card p:last-child { margin-bottom: 0; }
+  .card.warn { border-left-color: var(--orange); }
+  .card.ok { border-left-color: var(--green); }
+  blockquote { background: var(--bg-soft); border-left: 4px solid var(--orange); padding: 12px 18px; margin: 14px 0; font-size: 15px; }
+  blockquote p:last-child { margin-bottom: 0; }
+  pre { background: var(--bg-deep); border-left: 4px solid var(--bg-3); padding: 12px 16px; margin: 12px 0; overflow-x: auto; font-family: var(--mono); font-size: 13.5px; color: #cbd5e1; line-height: 1.7; }
+  pre.fig { font-size: 12.8px; line-height: 1.55; color: #cbd5e1; }
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-3); color: var(--head); font-weight: 700; }
+  td.c, th.c { text-align: center; }
+  td.key { font-family: var(--mono); font-size: 13.5px; color: var(--cyan); white-space: nowrap; }
+
+  .badge { display: inline-block; font-family: var(--mono); font-size: 12.5px; border: 1px solid var(--border); padding: 0 6px; color: var(--dim); }
+  .badge.ok { color: var(--green); border-color: #2f6b45; }
+  .badge.todo { color: var(--red); border-color: #7a2b2b; }
+  .badge.must { color: var(--orange); border-color: #7a4a1d; }
+
+  /* 分层图 layer stack */
+  .stack { margin: 16px 0 6px; }
+  .layer {
+    display: flex; align-items: stretch; gap: 0;
+    background: var(--bg-soft); border: 1px solid var(--line);
+  }
+  .layer .ltag {
+    flex: 0 0 58px; display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 17px; font-weight: 700; color: var(--bg);
+    background: var(--blue); letter-spacing: 1px;
+  }
+  .layer.l2 .ltag { background: var(--cyan); }
+  .layer.l3 .ltag { background: var(--green); }
+  .layer.l4 .ltag { background: var(--orange); }
+  .layer .lbody { flex: 1 1 auto; padding: 12px 16px; border-right: 1px solid var(--line); }
+  .layer .lbody p { margin-bottom: 0; font-size: 14.5px; color: var(--dim); }
+  .layer .lblock { flex: 0 0 300px; padding: 12px 16px; }
+  .layer .lblock .lbl { font-size: 12px; letter-spacing: 1px; color: var(--faint); text-transform: uppercase; display: block; margin-bottom: 2px; }
+  .layer .lblock p { margin-bottom: 0; font-size: 14px; color: var(--text); }
+  .arrow { text-align: center; color: var(--faint); font-size: 13px; padding: 4px 0; font-family: var(--mono); }
+
+  footer { text-align: center; color: var(--faint); font-size: 13px; padding: 40px 0 10px; border-top: 1px solid var(--line); margin-top: 40px; }
+
+  @media print {
+    :root {
+      --bg: #ffffff; --bg-soft: #f8f9fa; --bg-3: #eceff3; --bg-deep: #f3f4f6;
+      --line: #d0d5dd; --border: #98a2b3;
+      --text: #1f2328; --dim: #57606a; --faint: #6b7280; --head: #111418;
+      --blue: #1d4ed8; --green: #15803d; --orange: #b45309; --red: #b91c1c;
+      --cyan: #0e7490; --purple: #6d28d9;
+    }
+    @page { size: A4; margin: 14mm 15mm; }
+    html { color-scheme: light; }
+    body { background: #fff; color: #1f2328; padding-right: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    aside.toc { display: none; }
+    header.hero { border-bottom: 2px solid #111; padding-top: 0; }
+    h2 { border-left-color: #111; }
+    .card, blockquote, pre { background: #f8f9fa; border-color: #d0d5dd; }
+    pre { background: #f3f4f6; }
+    th { background: #eceff3; }
+    .layer { background: #fff; border-color: #98a2b3; }
+    .layer .ltag { background: #eceff3; color: #111418; border-right: 1px solid #98a2b3; }
+    table, pre, .card, .stack, .layer { page-break-inside: avoid; }
+    section { padding: 16px 0 2px; }
+  }
+</style>
+</head>
+<body>
+
+<aside class="toc">
+  <div class="toc-title">目录</div>
+  <a href="#why">为什么单独讲可靠性</a>
+  <div class="grp">四层防线</div>
+  <a href="#layers">L1–L4 分层与拦截范围</a>
+  <a href="#skeleton">模板固定骨架</a>
+  <div class="grp">验证</div>
+  <a href="#cases">5 个实跑用例</a>
+  <a href="#mapping">失败类型与拦截层</a>
+  <a href="#static">12 项静态断言</a>
+  <div class="grp">运行与边界</div>
+  <a href="#observability">运行时可观测</a>
+  <a href="#limits">边界与已知限制</a>
+</aside>
+
+<div class="wrap">
+
+<header class="hero">
+  <h1>AutomationKit 可靠性保障</h1>
+  <div class="sub">怎样让生成出来的工作流真正跑得稳 · 四层防线 · 5 个实跑用例 · 12 项静态断言</div>
+  <div class="meta">版本 0.1.0 ｜ 2026-11-01 ｜ 目标运行时 n8n 2.45.0 + Postgres 17 ｜ 与《系统设计文档》配套</div>
+</header>
+
+<!-- ================= 为什么 ================= -->
+<section id="why">
+  <h2>为什么单独讲可靠性</h2>
+
+  <p>这份文档不描述功能，只回答一个问题：<b>工作流写出来之后，凭什么说它能一直跑对</b>。</p>
+
+  <p>背景变化很直接：AI 已经能在几分钟内生成一张看起来完整的流程图，成本趋近于零。但<b>生成不等于可用</b>——生成器给出的是「节点连上了」，不是「失败时你知道，重复时不会写两条」。</p>
+
+  <p class="dim">本项目的 6 个模板全部手写 JSON，依然在一次真实运行中暴露出 6 个缺陷，且全部属于静默失效。这不是生成工具的毛病，而是工作流这类系统的固有属性：<b>它的错误在第一次跑之前不可见</b>。</p>
+
+  <table>
+    <thead><tr><th>本轮实跑暴露的缺陷</th><th>性质</th><th>读代码能否发现</th></tr></thead>
+    <tbody>
+      <tr><td>SQL 返回 0 行时链路并未停止（节点输出 <code>{"success":true}</code>）</td><td>平台行为与直觉相反</td><td class="c"><span class="badge todo">不能</span></td></tr>
+      <tr><td><code>ON CONFLICT DO NOTHING</code> 让失败的 key 永久占死</td><td>设计假设错误</td><td class="c"><span class="badge todo">不能</span></td></tr>
+      <tr><td>占位节点吞掉 payload，下游字段全变 <code>undefined</code></td><td>数据流隐式覆盖</td><td class="c"><span class="badge todo">不能</span></td></tr>
+      <tr><td>错误 item 没有 <code>node</code> 字段，落表节点名恒为 <code>unknown</code></td><td>平台数据结构</td><td class="c"><span class="badge todo">不能</span></td></tr>
+      <tr><td>日报取数读错来源，静默输出 <code>undefined</code></td><td>表达式引用错误</td><td class="c"><span class="badge todo">不能</span></td></tr>
+      <tr><td>Slack 频道占位符不过正则，整条流被判 has issues</td><td>参数校验</td><td class="c"><span class="badge must">可能</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="card ok">
+    <p><b>结论</b>：可靠性无法靠"写得更仔细"获得，只能靠<b>分层拦截 + 可重复验证</b>。下文四层防线，就是把这 6 类问题分别压到最低成本的那一层去拦。</p>
+  </div>
+</section>
+
+<!-- ================= 四层防线 ================= -->
+<section id="layers">
+  <h2>四层防线</h2>
+
+  <p>从"生成"到"客户环境运行"，有四个可以加检查的位置。越靠前成本越低，但覆盖面越窄；越靠后覆盖越全，但代价是客户现场才发现问题。</p>
+
+  <div class="stack">
+    <div class="layer l1">
+      <div class="ltag">L1</div>
+      <div class="lbody">
+        <h4>骨架约束 <span class="en">skeleton constraint</span></h4>
+        <p>不自由生成整张图，只允许在固定骨架里填业务节点。形状不对一眼可见。</p>
+      </div>
+      <div class="lblock">
+        <span class="lbl">拦住</span>
+        <p>漏错误分支、漏幂等、payload 被覆盖</p>
+      </div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="layer l2">
+      <div class="ltag">L2</div>
+      <div class="lbody">
+        <h4>静态断言 <span class="en">static assertion</span></h4>
+        <p>不启动 n8n 也能查的机械检查：JSON 结构、节点存在性、占位符格式、版本区间。</p>
+      </div>
+      <div class="lblock">
+        <span class="lbl">拦住</span>
+        <p>占位符非法、typeVersion 越界、残留凭证与演示节点</p>
+      </div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="layer l3">
+      <div class="ltag">L3</div>
+      <div class="lbody">
+        <h4>实跑用例 <span class="en">runtime cases</span></h4>
+        <p>导入真实实例，按 5 个固定用例跑一遍，断言数据库状态与执行结果。</p>
+      </div>
+      <div class="lblock">
+        <span class="lbl">拦住</span>
+        <p>0 行不停链路、失败 key 占死、取数错源、链路断开</p>
+      </div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="layer l4">
+      <div class="ltag">L4</div>
+      <div class="lbody">
+        <h4>可观测 <span class="en">observability</span></h4>
+        <p>上线后每次失败都落 <code>workflow_errors</code>，四个字段齐全，客户自己能查。</p>
+      </div>
+      <div class="lblock">
+        <span class="lbl">兜住</span>
+        <p>你预想不到的客户环境特有故障</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card warn">
+    <p><b>重心应往前压</b>：L1 + L2 是分钟级、可重复、零成本的；L4 只能告诉你"已经坏了"。把本该 L1 解决的事情留给 L4 兜底，等于把成本转嫁给客户。</p>
+  </div>
+</section>
+
+<!-- ================= 骨架 ================= -->
+<section id="skeleton">
+  <h2>模板固定骨架</h2>
+
+  <p>L1 的具体形状。6 个模板共用同一套骨架，只有中间的"业务节点"不同，因此任何缺件都能被肉眼发现。</p>
+
+  <pre class="fig">[触发] ─▶ [归一化] ─▶ [Claim 占位] ─▶ [Claimed? 闸门] ─▶ [业务节点…] ─▶ [Mark Done 落章]
+                        │                  │                 │
+                        │(error)           │                 │(error)
+                        └──────────────────┴─────────────────┴──────▶ [Log Error]
+                                                                          │
+                                                                          ▼
+                                                                  workflow_errors
+                                                     (workflow / node / message / payload)</pre>
+
+  <h3>三个出口的分工</h3>
+
+  <table>
+    <thead><tr><th>出口</th><th>触发条件</th><th>处理方式</th><th>对客户的可见性</th></tr></thead>
+    <tbody>
+      <tr><td class="key">Claim 错误分支</td><td>数据库不可用 / 权限不足</td><td>写入 <code>workflow_errors</code></td><td>可见，事件不丢</td></tr>
+      <tr><td class="key">Claimed? 空输出</td><td>事件已处理过，或仍在租约内</td><td><b>静默停止</b>，不写错误表</td><td>不可见——这正是"去重成功"的表现</td></tr>
+      <tr><td class="key">业务节点错误分支</td><td>第三方 5xx、超时、鉴权失败</td><td>写入 <code>workflow_errors</code>，key 停在 <code>claimed</code></td><td>可见，10 分钟后自动可重试</td></tr>
+    </tbody>
+  </table>
+
+  <div class="card">
+    <p><b>为什么闸门必须单独存在</b>：n8n 2.45.0 的 Postgres 节点在 SQL 返回 0 行时，输出是一条 <code>{"success": true}</code>，不是空输出。所以"0 行 → 后续节点没有输入 → 链路自然停止"这个说法不成立，必须用 Code 节点显式过滤。闸门同时承担另一个职责：把 <code>RETURNING key, payload</code> 带回的 payload 还原成下游可读的字段。</p>
+  </div>
+</section>
+
+<!-- ================= 用例 ================= -->
+<section id="cases">
+  <h2>5 个实跑用例</h2>
+
+  <p>不需要为每个模板设计复杂测试。下面 5 个用例覆盖了本轮暴露的全部缺陷，缺一条就等于没验。</p>
+
+  <table>
+    <thead><tr><th class="c">#</th><th>用例</th><th>断言</th><th class="c">本机结果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="c">1</td>
+        <td>正常输入</td>
+        <td>业务成功，<code>processed_keys.status = done</code></td>
+        <td class="c"><span class="badge ok">通过</span></td>
+      </tr>
+      <tr>
+        <td class="c">2</td>
+        <td><b>同一输入连投两次</b></td>
+        <td>第二次在闸门停下（<code>lastNodeExecuted = Claimed?</code>），业务侧没有第二条记录</td>
+        <td class="c"><span class="badge ok">通过</span></td>
+      </tr>
+      <tr>
+        <td class="c">3</td>
+        <td>外部调用失败（坏域名 / 坏凭证）</td>
+        <td><code>workflow_errors</code> 多一行，且 <code>node</code> 是真实失败节点名</td>
+        <td class="c"><span class="badge ok">通过</span></td>
+      </tr>
+      <tr>
+        <td class="c">4</td>
+        <td>失败后立刻重跑</td>
+        <td>被 10 分钟租约挡住，不产生重复处理</td>
+        <td class="c"><span class="badge ok">通过</span></td>
+      </tr>
+      <tr>
+        <td class="c">5</td>
+        <td>租约回拨 11 分钟后重跑</td>
+        <td>重新认领成功，并再次落 <code>done</code></td>
+        <td class="c"><span class="badge ok">通过</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>实测证据（2026-11-01，本机实例）</h3>
+
+  <pre>-- 用例 3 落表的真实记录
+select id, workflow, node, left(message, 45)
+from workflow_errors order by id;
+   4 | AutomationKit - Lead Routing | Push to CRM | getaddrinfo ENOTFOUND your_crm_domain
+
+-- 用例 1 / 4 / 5 的状态变化
+select key, status, updated_at from processed_keys order by key;
+   webhook@example.com::website | claimed | 2026-11-01 11:37:02.626593+08   -- 用例 3 失败后停留
+   demo@example.com::cli        | claimed | 2026-11-01 10:40:25.286851+08   -- 用例 4 被租约挡住</pre>
+
+  <p class="faint">补充：真实 Webhook 入口也已验证 —— <code>POST /webhook/lead-routing</code> 返回 <code>200 {"message":"Workflow was started"}</code>，执行记录 <code>mode = webhook</code>、<code>status = success</code>；同一 body 连投两次，错误表不增加。</p>
+</section>
+
+<!-- ================= 映射 ================= -->
+<section id="mapping">
+  <h2>失败类型与拦截层</h2>
+
+  <p>用来判断"这个问题该在哪一层解决"。同一类问题放在错误的层，成本会差一个数量级。</p>
+
+  <table>
+    <thead><tr><th>失败类型</th><th>应该被谁拦住</th><th class="c">成本</th><th>漏掉的后果</th></tr></thead>
+    <tbody>
+      <tr><td>占位符合法性 / <code>typeVersion</code> 越界</td><td>L2 静态断言</td><td class="c">最低</td><td>客户导入即红，或直接无法激活</td></tr>
+      <tr><td>漏错误分支 / 漏幂等 / payload 被覆盖</td><td>L1 骨架 + L2 断言</td><td class="c">低</td><td>重复写入、失败静默</td></tr>
+      <tr><td>0 行不停链路 / 取数错源</td><td>L3 实跑用例</td><td class="c">中</td><td>报表含错数、业务侧重复执行</td></tr>
+      <tr><td>第三方限流 / 网络抖动</td><td>L3 用例 3 + 运行时重试</td><td class="c">中</td><td>偶发丢事件，且无记录</td></tr>
+      <tr><td>客户环境特有配置（凭证、域名、频道）</td><td>L4 可观测 + 说明书</td><td class="c">高</td><td>只能靠客户自己发现——必须留痕</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ================= 静态断言 ================= -->
+<section id="static">
+  <h2>12 项静态断言</h2>
+
+  <p>不启动 n8n、不连数据库，纯读 <code>workflow.json</code> 就能查的机械检查。6 个模板全部通过。</p>
+
+  <table>
+    <thead><tr><th class="c">#</th><th>检查项</th><th>判定依据</th></tr></thead>
+    <tbody>
+      <tr><td class="c">1</td><td>JSON 可解析</td><td><code>JSON.parse</code> 不抛错</td></tr>
+      <tr><td class="c">2</td><td>存在占位节点</td><td>节点 query 含 <code>INSERT INTO processed_keys</code></td></tr>
+      <tr><td class="c">3</td><td>占位使用租约</td><td>query 含 <code>interval '10 minutes'</code> 与 <code>status</code> 判断</td></tr>
+      <tr><td class="c">4</td><td>占位有错误分支</td><td><code>onError === 'continueErrorOutput'</code></td></tr>
+      <tr><td class="c">5</td><td>占位带回 payload</td><td>query 含 <code>RETURNING key, payload</code></td></tr>
+      <tr><td class="c">6</td><td>存在闸门节点</td><td>节点名 <code>Claimed?</code></td></tr>
+      <tr><td class="c">7</td><td>闸门还原 payload</td><td>jsCode 含 <code>claimKey</code> 且对 <code>payload</code> 做合并</td></tr>
+      <tr><td class="c">8</td><td>存在落章节点且接线</td><td>节点名 <code>Mark Done</code>，且被某节点成功输出指向</td></tr>
+      <tr><td class="c">9</td><td>错误落表用真实节点名</td><td>queryReplacement 含 <code>$prevNode.name</code></td></tr>
+      <tr><td class="c">10</td><td>无残留凭证</td><td>任何节点不含 <code>credentials</code> 字段</td></tr>
+      <tr><td class="c">11</td><td>无演示节点</td><td>节点名不含 <code>demo</code>（本地调试副本不入交付包）</td></tr>
+      <tr><td class="c">12</td><td>坐标紧凑</td><td><code>position</code> 为单行数组，便于 diff 与人工复核</td></tr>
+    </tbody>
+  </table>
+
+  <div class="card">
+    <p><b>为什么第 10、11 项必须有</b>：本地为了跑通会挂演示凭证、加手动触发器。这些一旦混进交付包，客户拿到的是"别人的环境配置"，既跑不了也有安全隐患。断言比"记得删"可靠。</p>
+  </div>
+</section>
+
+<!-- ================= 可观测 ================= -->
+<section id="observability">
+  <h2>运行时可观测</h2>
+
+  <h3>一次失败必须留下的四个字段</h3>
+
+  <table>
+    <thead><tr><th>字段</th><th>来源</th><th>缺失时你会失去什么</th></tr></thead>
+    <tbody>
+      <tr><td class="key">workflow</td><td><code>$workflow.name</code></td><td>不知道哪个模板出的问题</td></tr>
+      <tr><td class="key">node</td><td><code>$prevNode.name</code></td><td>不知道从哪个环节修（写 <code>$json.node.name</code> 会恒为 <code>unknown</code>）</td></tr>
+      <tr><td class="key">message</td><td><code>$json.error.message</code></td><td>不知道是鉴权、超时还是字段缺失</td></tr>
+      <tr><td class="key">payload</td><td><code>JSON.stringify($json)</code></td><td>无法重放，只能等客户再发一次</td></tr>
+    </tbody>
+  </table>
+
+  <h3>客户自查命令</h3>
+
+  <pre>docker compose exec -T postgres psql -U autokit -d autokit -c \
+  "select workflow, node, message, created_at from workflow_errors
+   order by created_at desc limit 20;"</pre>
+
+  <h3>日报口径</h3>
+
+  <p>每日简报统计的是"过去 24 小时"的四个数字，口径固定：<code>processed_keys</code> 的处理量、错误量、复核队列积压量。数字必须从统计查询节点读取，不能从链路上游的占位行读取——这一条曾经写错，导致日报长期输出 <code>undefined</code>。</p>
+
+  <div class="card warn">
+    <p><b>静默失效是最贵的故障</b>：客户不会因为一次报错来投诉，但会因为"连续两周没收到日报"而流失。因此宁可多写一行错误，也不允许出现"什么都没发生"的假象。</p>
+  </div>
+</section>
+
+<!-- ================= 边界 ================= -->
+<section id="limits">
+  <h2>边界与已知限制</h2>
+
+  <table>
+    <thead><tr><th>限制</th><th>现状</th><th>触发条件 / 应对</th></tr></thead>
+    <tbody>
+      <tr><td><b>10 分钟租约是常量</b></td><td>写死在 SQL 中，不可配置</td><td>单次执行超过 10 分钟会出现并发重领。6 个模板均为秒级链路，安全；若接入长任务（大文件、批量 OCR）必须改为可配置或加心跳续租</td></tr>
+      <tr><td><b>真实第三方写入未验证</b></td><td>Slack / Notion / SMTP / CRM 均为占位地址</td><td>当前验证的是"失败被正确捕获"，不是"写入成功"。客户配好凭证后需自行跑一次</td></tr>
+      <tr><td><b>不保证业务数据一致性</b></td><td>业务表由客户定义</td><td>跨系统的最终一致（eventual consistency）由客户业务侧负责，模板只保证"不重复触发"</td></tr>
+      <tr><td><b>agent 类节点有迭代上限</b></td><td>当前模板不使用 agent</td><td>若引入 agent，必须设最大迭代次数，否则一次幻觉可持续烧 token</td></tr>
+      <tr><td><b>单实例部署</b></td><td>一个 main + 一个 Postgres</td><td>main 挂掉期间 Webhook 入口不可用；执行层的高可用（queue mode + worker）属于另一个价格档位</td></tr>
+      <tr><td><b>错误表会无限增长</b></td><td>无自动清理</td><td>建议客户按季度归档；量大时按 <code>created_at</code> 分区</td></tr>
+    </tbody>
+  </table>
+
+  <div class="card ok">
+    <p><b>可复现的结论</b>：把一个工作流从"能跑"做到"可交付"，靠的不是更聪明的生成，而是<b>骨架约束 + 机械断言 + 固定用例 + 失败留痕</b>这四件事。它们都可以被写成脚本、被别人复核、被下一次复用。</p>
+  </div>
+</section>
+
+<footer>AutomationKit 可靠性保障 · 2026-11-01 · n8n 2.45.0 + Postgres 17 · 四层防线 · 5 个实跑用例 · 12 项静态断言</footer>
+
+</div>
+
+<script>
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('aside.toc a'));
+  var targets = links.map(function (a) { return document.querySelector(a.getAttribute('href')); });
+  function highlight() {
+    var pos = window.scrollY + 120;
+    var idx = 0;
+    for (var i = 0; i < targets.length; i++) {
+      if (targets[i] && targets[i].offsetTop <= pos) { idx = i; }
+    }
+    links.forEach(function (a, i) { a.classList.toggle('active', i === idx); });
+  }
+  window.addEventListener('scroll', highlight, { passive: true });
+  window.addEventListener('resize', highlight);
+  highlight();
+  links.forEach(function (a) { a.addEventListener('click', function () { setTimeout(highlight, 400); }); });
+})();
+</script>
+
+</body>
+</html>

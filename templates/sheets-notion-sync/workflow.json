@@ -1,0 +1,267 @@
+{
+  "name": "AutomationKit - Sheet to Notion Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Sheet to Notion Sync\n\nEvery 15 min -> read sheet rows -> detect changed rows -> dedupe -> create Notion page.\n\n**Duplicate protection**: the key is row_number + updated_at. Editing a row produces a new key (a fresh Notion page); re-running the schedule on unchanged data produces the same key and is skipped.\n\n**Conflict rule**: the sheet is the source of truth. Notion is write-only here - edits made in Notion are NOT pushed back to the sheet, so they can never be silently overwritten.\n\n**Failure behaviour**: Notion calls retry 3 times, then log to workflow_errors. The next run picks the row up again (same key, so no duplicate page once the first attempt succeeded).\n\n**Before activating**: set a Google Sheets credential, a Postgres credential, and your Notion token + database id.",
+        "height": 320,
+        "width": 460,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-260, 20],
+      "id": "sn-sticky",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 320],
+      "id": "sn-trigger",
+      "name": "Every 15 Min"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SHEET_ID_HERE"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [220, 320],
+      "id": "sn-read",
+      "name": "Read Rows",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keep only rows that are worth syncing, and build a version key.\n// KEY = row_number + updated_at, so an edited row syncs again but an unchanged\n// row is skipped on every following run.\nconst REQUIRED = ['name', 'email'];\n\nreturn items.map((item) => {\n  const r = item.json;\n  const rowNumber = r.row_number || r.rowNumber || '';\n  const updatedAt = String(r.updated_at || r.updatedAt || '').trim();\n\n  const missing = REQUIRED.filter((k) => !String(r[k] || '').trim());\n  if (missing.length > 0 || !rowNumber) {\n    return null;\n  }\n\n  return {\n    json: {\n      eventId: String(rowNumber) + '::' + (updatedAt || 'v1'),\n      rowNumber,\n      name: String(r.name).trim(),\n      email: String(r.email).trim(),\n      status: String(r.status || 'new').trim(),\n      updatedAt: updatedAt || new Date().toISOString(),\n    },\n  };\n}).filter((x) => x !== null);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 320],
+      "id": "sn-detect",
+      "name": "Detect Changes"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO processed_keys (key, workflow, payload, status)\nVALUES ($1, $2, $3::jsonb, 'claimed')\nON CONFLICT (key) DO UPDATE\n  SET status = 'claimed',\n      updated_at = now()\n  WHERE processed_keys.status <> 'done'\n    AND processed_keys.updated_at < now() - interval '10 minutes'\nRETURNING key, payload",
+        "options": {
+          "queryReplacement": "={{ $json.eventId }}, {{ $workflow.name }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [660, 320],
+      "id": "sn-claim",
+      "name": "Claim Key",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_NOTION_TOKEN_HERE"
+            },
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ parent: { database_id: 'YOUR_NOTION_DATABASE_ID' }, properties: { Name: { title: [ { text: { content: $json.name } } ] }, Email: { email: $json.email }, Status: { select: { name: $json.status } }, Updated: { rich_text: [ { text: { content: $json.updatedAt } } ] } } }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 320],
+      "id": "sn-notion",
+      "name": "Upsert Notion",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_errors (workflow, node, message, payload)\nVALUES ($1, $2, $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ $workflow.name }}, {{ $prevNode.name }}, {{ ($json.error && $json.error.message) || 'request failed' }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1100, 580],
+      "id": "sn-error",
+      "name": "Log Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE processed_keys\nSET status = 'done',\n    updated_at = now()\nWHERE key = $1\nRETURNING key",
+        "options": {
+          "queryReplacement": "={{ $('Claim Key').first().json.key }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1320, 320],
+      "id": "sheets-notion-sync-done",
+      "name": "Mark Done",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Two jobs, both required:\n//  1. Stop the run when the key is already taken. A Postgres node that gets 0 rows emits\n//     { success: true } instead of an empty output, so filtering is what actually stops it.\n//  2. Put the original payload back. The claim node outputs the SQL row, so without this\n//     every downstream node would read fields that no longer exist.\nreturn items\n  .filter((item) => item.json && item.json.key)\n  .map((item) => ({\n    json: Object.assign({}, item.json.payload || {}, { claimKey: item.json.key }),\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 320],
+      "id": "sheets-notion-sync-gate",
+      "name": "Claimed?"
+    }
+  ],
+  "connections": {
+    "Every 15 Min": {
+      "main": [
+        [
+          {
+            "node": "Read Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Rows": {
+      "main": [
+        [
+          {
+            "node": "Detect Changes",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Changes": {
+      "main": [
+        [
+          {
+            "node": "Claim Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Key": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Notion": {
+      "main": [
+        [
+          {
+            "node": "Mark Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Done": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "Upsert Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {}
+}

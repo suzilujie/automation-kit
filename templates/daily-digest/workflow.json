@@ -1,0 +1,287 @@
+{
+  "name": "AutomationKit - Daily Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Daily Digest\n\nEvery day 09:00 -> query yesterday's numbers -> LLM writes the digest -> email it.\n\n**Duplicate protection**: the key is the date. Restarting the container or re-running the schedule on the same day will NOT send a second email.\n\n**Failure behaviour**: LLM and SMTP retry 3 times, then log to workflow_errors. No email is sent with half a report.\n\n**No external dependency except the LLM and SMTP** - the numbers come from the local Postgres, so this template works on day one even before you connect any other system.\n\n**Before activating**: set a Postgres credential, a DeepSeek credential (Header Auth), and an SMTP credential.",
+        "height": 300,
+        "width": 440,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-260, 40],
+      "id": "dd-sticky",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 320],
+      "id": "dd-trigger",
+      "name": "Daily 09:00"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  (SELECT count(*) FROM processed_keys WHERE created_at >= now() - interval '24 hours') AS processed_last_24h,\n  (SELECT count(*) FROM processed_keys WHERE created_at >= now() - interval '24 hours' AND workflow LIKE '%Lead Routing%') AS leads_last_24h,\n  (SELECT count(*) FROM processed_keys WHERE created_at >= now() - interval '24 hours' AND workflow LIKE '%Support Triage%') AS tickets_last_24h,\n  (SELECT count(*) FROM workflow_errors WHERE created_at >= now() - interval '24 hours') AS errors_last_24h,\n  (SELECT count(*) FROM review_queue WHERE created_at >= now() - interval '24 hours') AS review_queue_last_24h",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [220, 320],
+      "id": "dd-stats",
+      "name": "Query Last 24h",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO processed_keys (key, workflow, payload, status)\nVALUES ($1, $2, $3::jsonb, 'claimed')\nON CONFLICT (key) DO UPDATE\n  SET status = 'claimed',\n      updated_at = now()\n  WHERE processed_keys.status <> 'done'\n    AND processed_keys.updated_at < now() - interval '10 minutes'\nRETURNING key, payload",
+        "options": {
+          "queryReplacement": "={{ $now.toFormat('yyyy-MM-dd') }}, {{ $workflow.name }}, {{ JSON.stringify({ sentAt: $now.toISO() }) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [440, 320],
+      "id": "dd-claim",
+      "name": "Claim Today",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read the numbers from the stats query, not from this node input:\n// between them sit the claim and the gate, whose payload is not the stats row.\nconst s = $('Query Last 24h').first().json;\n\nconst facts = [\n  'processed events (24h): ' + s.processed_last_24h,\n  'new leads (24h): ' + s.leads_last_24h,\n  'support tickets (24h): ' + s.tickets_last_24h,\n  'workflow errors (24h): ' + s.errors_last_24h,\n  'items waiting in review queue (24h): ' + s.review_queue_last_24h,\n].join('\\n');\n\nreturn [\n  {\n    json: {\n      facts,\n      errors: Number(s.errors_last_24h || 0),\n      digestDate: $now.toFormat('yyyy-MM-dd'),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 320],
+      "id": "dd-facts",
+      "name": "Compose Facts"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'deepseek-chat', temperature: 0.3, messages: [ { role: 'system', content: 'You write a short daily operations digest for a small team. Use ONLY the numbers given, never invent or recalculate them. Format: a one-line headline, then 3-5 bullets, then one line starting with ACTION: that names the single most important thing to look at today.' }, { role: 'user', content: 'Date: ' + $json.digestDate + '\\n\\n' + $json.facts } ] }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 320],
+      "id": "dd-llm",
+      "name": "LLM Write Digest",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "YOUR_SMTP_ACCOUNT",
+        "toEmail": "YOUR_TEAM_DISTRIBUTION_LIST",
+        "subject": "=Daily digest {{ $('Compose Facts').item.json.digestDate }}",
+        "emailFormat": "text",
+        "text": "={{ ($json.choices && $json.choices[0] && $json.choices[0].message) ? $json.choices[0].message.content : 'Digest generation returned no content.' }}\n\n--\nRaw numbers:\n{{ $('Compose Facts').item.json.facts }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1320, 320],
+      "id": "dd-mail",
+      "name": "Send Digest",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_errors (workflow, node, message, payload)\nVALUES ($1, $2, $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ $workflow.name }}, {{ $prevNode.name }}, {{ ($json.error && $json.error.message) || 'request failed' }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1320, 580],
+      "id": "dd-error",
+      "name": "Log Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE processed_keys\nSET status = 'done',\n    updated_at = now()\nWHERE key = $1\nRETURNING key",
+        "options": {
+          "queryReplacement": "={{ $('Claim Today').first().json.key }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1540, 320],
+      "id": "daily-digest-done",
+      "name": "Mark Done",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Two jobs, both required:\n//  1. Stop the run when the key is already taken. A Postgres node that gets 0 rows emits\n//     { success: true } instead of an empty output, so filtering is what actually stops it.\n//  2. Put the original payload back. The claim node outputs the SQL row, so without this\n//     every downstream node would read fields that no longer exist.\nreturn items\n  .filter((item) => item.json && item.json.key)\n  .map((item) => ({\n    json: Object.assign({}, item.json.payload || {}, { claimKey: item.json.key }),\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 320],
+      "id": "daily-digest-gate",
+      "name": "Claimed?"
+    }
+  ],
+  "connections": {
+    "Daily 09:00": {
+      "main": [
+        [
+          {
+            "node": "Query Last 24h",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Last 24h": {
+      "main": [
+        [
+          {
+            "node": "Claim Today",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Today": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Facts": {
+      "main": [
+        [
+          {
+            "node": "LLM Write Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Write Digest": {
+      "main": [
+        [
+          {
+            "node": "Send Digest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Digest": {
+      "main": [
+        [
+          {
+            "node": "Mark Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Done": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "Compose Facts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {}
+}

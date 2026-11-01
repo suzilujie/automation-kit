@@ -1,0 +1,387 @@
+{
+  "name": "AutomationKit - Invoice Parsing",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Invoice Parsing\n\nWebhook (or email) -> dedupe -> PDF to text -> LLM extraction -> confidence gate -> accounting or review queue.\n\n**Duplicate protection**: messageId + attachment name is the key. A retried email never creates a second record.\n\n**Failure behaviour**: PDF service and LLM retry 3 times, then log to workflow_errors. A PDF that cannot be read becomes a review_queue row instead of an exception - a human sees it.\n\n**Before activating**: set a Postgres credential, a DeepSeek credential (Header Auth) on `LLM Extract`, and replace the two placeholder URLs.\n\n**Swap in an email trigger**: replace `Invoice In` with an IMAP or Gmail trigger node; the rest of the chain is unchanged.",
+        "height": 300,
+        "width": 460,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-260, 40],
+      "id": "ip-sticky",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoice-parsing",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 320],
+      "id": "ip-webhook",
+      "name": "Invoice In",
+      "webhookId": "invoice-parsing"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the dedupe key and normalise the input.\n// Expected body: { messageId, attachmentName, fileUrl, vendorHint }\nreturn items.map((item) => {\n  const body = item.json.body || item.json;\n  const messageId = String(body.messageId || '').trim();\n  const attachmentName = String(body.attachmentName || 'invoice.pdf').trim();\n  const fileUrl = String(body.fileUrl || '').trim();\n\n  if (!messageId) {\n    throw new Error('Missing messageId - cannot dedupe this invoice');\n  }\n  if (!fileUrl) {\n    throw new Error('Missing fileUrl - nothing to parse');\n  }\n\n  return {\n    json: {\n      eventId: messageId + '::' + attachmentName,\n      messageId,\n      attachmentName,\n      fileUrl,\n      vendorHint: body.vendorHint || '',\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 320],
+      "id": "ip-normalise",
+      "name": "Normalise Invoice"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO processed_keys (key, workflow, payload, status)\nVALUES ($1, $2, $3::jsonb, 'claimed')\nON CONFLICT (key) DO UPDATE\n  SET status = 'claimed',\n      updated_at = now()\n  WHERE processed_keys.status <> 'done'\n    AND processed_keys.updated_at < now() - interval '10 minutes'\nRETURNING key, payload",
+        "options": {
+          "queryReplacement": "={{ $json.eventId }}, {{ $workflow.name }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [440, 320],
+      "id": "ip-claim",
+      "name": "Claim Key",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_PDF_SERVICE_DOMAIN/to-text",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.fileUrl }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 320],
+      "id": "ip-pdf",
+      "name": "PDF to Text",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'deepseek-chat', temperature: 0, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: 'Extract invoice fields. Return JSON only with keys: vendor, invoice_number, invoice_date (YYYY-MM-DD), currency (ISO 4217), total_amount (number), line_items (array of {description, quantity, unit_price, amount}). Use null when a field is not present. Never invent values.' }, { role: 'user', content: String(($json.text || $json.body || '')).slice(0, 12000) } ] }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 320],
+      "id": "ip-llm",
+      "name": "LLM Extract",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the extraction and score how complete it is.\n// confidence = filled core fields / expected core fields.\n// A low score is not an error - it routes the invoice to a human.\nconst CORE = ['vendor', 'invoice_number', 'invoice_date', 'currency', 'total_amount'];\n\nreturn items.map((item) => {\n  const choice = item.json.choices && item.json.choices[0];\n  const raw = choice && choice.message ? choice.message.content : '{}';\n\n  let parsed = {};\n  try {\n    parsed = JSON.parse(raw);\n  } catch (e) {\n    parsed = {};\n  }\n\n  let filled = 0;\n  for (const k of CORE) {\n    const v = parsed[k];\n    if (v !== null && v !== undefined && String(v).trim() !== '') filled += 1;\n  }\n\n  const source = $('Normalise Invoice').item.json;\n\n  return {\n    json: {\n      eventId: source.eventId,\n      confidence: Number((filled / CORE.length).toFixed(2)),\n      missingFields: CORE.filter((k) => { const v = parsed[k]; return v === null || v === undefined || String(v).trim() === ''; }),\n      vendor: parsed.vendor || null,\n      invoiceNumber: parsed.invoice_number || null,\n      invoiceDate: parsed.invoice_date || null,\n      currency: parsed.currency || null,\n      totalAmount: parsed.total_amount === undefined ? null : parsed.total_amount,\n      lineItems: Array.isArray(parsed.line_items) ? parsed.line_items : [],\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 320],
+      "id": "ip-score",
+      "name": "Parse & Score"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ip-cond-1",
+              "leftValue": "={{ $json.confidence }}",
+              "rightValue": 0.8,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1540, 320],
+      "id": "ip-if",
+      "name": "Confident?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_ACCOUNTING_SYSTEM_DOMAIN/api/invoices",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ vendor: $json.vendor, invoice_number: $json.invoiceNumber, invoice_date: $json.invoiceDate, currency: $json.currency, total_amount: $json.totalAmount, line_items: $json.lineItems }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 220],
+      "id": "ip-push",
+      "name": "Push to Accounting",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO review_queue (workflow, item_key, reason, payload)\nVALUES ($1, $2, $3, $4::jsonb)\nON CONFLICT (workflow, item_key) DO NOTHING",
+        "options": {
+          "queryReplacement": "={{ $workflow.name }}, {{ $json.eventId }}, {{ 'missing: ' + ($json.missingFields || []).join(', ') }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1760, 420],
+      "id": "ip-review",
+      "name": "Queue for Review",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_errors (workflow, node, message, payload)\nVALUES ($1, $2, $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ $workflow.name }}, {{ $prevNode.name }}, {{ ($json.error && $json.error.message) || 'request failed' }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1760, 620],
+      "id": "ip-error",
+      "name": "Log Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE processed_keys\nSET status = 'done',\n    updated_at = now()\nWHERE key = $1\nRETURNING key",
+        "options": {
+          "queryReplacement": "={{ $('Claim Key').first().json.key }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1980, 320],
+      "id": "invoice-parsing-done",
+      "name": "Mark Done",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Two jobs, both required:\n//  1. Stop the run when the key is already taken. A Postgres node that gets 0 rows emits\n//     { success: true } instead of an empty output, so filtering is what actually stops it.\n//  2. Put the original payload back. The claim node outputs the SQL row, so without this\n//     every downstream node would read fields that no longer exist.\nreturn items\n  .filter((item) => item.json && item.json.key)\n  .map((item) => ({\n    json: Object.assign({}, item.json.payload || {}, { claimKey: item.json.key }),\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 320],
+      "id": "invoice-parsing-gate",
+      "name": "Claimed?"
+    }
+  ],
+  "connections": {
+    "Invoice In": {
+      "main": [
+        [
+          {
+            "node": "Normalise Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Invoice": {
+      "main": [
+        [
+          {
+            "node": "Claim Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Key": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF to Text": {
+      "main": [
+        [
+          {
+            "node": "LLM Extract",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Extract": {
+      "main": [
+        [
+          {
+            "node": "Parse & Score",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Score": {
+      "main": [
+        [
+          {
+            "node": "Confident?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confident?": {
+      "main": [
+        [
+          {
+            "node": "Push to Accounting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue for Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Push to Accounting": {
+      "main": [
+        [
+          {
+            "node": "Mark Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue for Review": {
+      "main": [
+        [
+          {
+            "node": "Mark Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Done": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "PDF to Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {}
+}

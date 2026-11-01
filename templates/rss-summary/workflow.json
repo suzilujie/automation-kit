@@ -1,0 +1,286 @@
+{
+  "name": "AutomationKit - RSS Summary",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## RSS Summary\n\nEvery hour -> read feed -> dedupe by guid -> LLM summary -> Notion page.\n\n**Duplicate protection**: each article guid is written once. Re-running the schedule never duplicates pages, even if the feed republishes the same item.\n\n**Failure behaviour**: LLM and Notion calls retry 3 times, then log to workflow_errors. The schedule keeps running.\n\n**Before activating**: set the feed URL in `Fetch Feed`, a Postgres credential on the two SQL nodes, a DeepSeek credential (Header Auth) on `LLM Summarize`, and your Notion token + database id in `Create Notion Page`.",
+        "height": 280,
+        "width": 440,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-260, 40],
+      "id": "rs-sticky",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "id": "rs-trigger",
+      "name": "Every Hour"
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_FEED_URL_HERE/rss.xml",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [220, 300],
+      "id": "rs-feed",
+      "name": "Fetch Feed"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build one dedupe key per article. Guid first, link as fallback.\n// Articles without any identifier are dropped instead of polluting the table.\nreturn items\n  .map((item) => {\n    const f = item.json;\n    const key = String(f.guid || f.link || '').trim();\n    return {\n      key,\n      title: String(f.title || '').trim(),\n      link: String(f.link || '').trim(),\n      content: String(f.contentSnippet || f.content || '').slice(0, 4000),\n      isoDate: f.isoDate || new Date().toISOString(),\n    };\n  })\n  .filter((a) => a.key !== '')\n  .map((a) => ({ json: { eventId: a.key, title: a.title, link: a.link, content: a.content, isoDate: a.isoDate } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "id": "rs-keys",
+      "name": "Build Keys"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO processed_keys (key, workflow, payload, status)\nVALUES ($1, $2, $3::jsonb, 'claimed')\nON CONFLICT (key) DO UPDATE\n  SET status = 'claimed',\n      updated_at = now()\n  WHERE processed_keys.status <> 'done'\n    AND processed_keys.updated_at < now() - interval '10 minutes'\nRETURNING key, payload",
+        "options": {
+          "queryReplacement": "={{ $json.eventId }}, {{ $workflow.name }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [660, 300],
+      "id": "rs-claim",
+      "name": "Claim Key",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'deepseek-chat', temperature: 0.2, messages: [ { role: 'system', content: 'Summarise the article in 3 short bullet points, in the language of the source. Then add one line: why it matters for someone building AI products. Plain text, no markdown headings.' }, { role: 'user', content: 'Title: ' + $json.title + '\\n\\n' + $json.content } ] }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "id": "rs-llm",
+      "name": "LLM Summarize",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_NOTION_TOKEN_HERE"
+            },
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ parent: { database_id: 'YOUR_NOTION_DATABASE_ID' }, properties: { Name: { title: [ { text: { content: $('Build Keys').item.json.title } } ] }, Link: { url: $('Build Keys').item.json.link } } , children: [ { object: 'block', type: 'paragraph', paragraph: { rich_text: [ { type: 'text', text: { content: ($json.choices && $json.choices[0] && $json.choices[0].message) ? $json.choices[0].message.content : '' } } ] } } ] }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "id": "rs-notion",
+      "name": "Create Notion Page",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_errors (workflow, node, message, payload)\nVALUES ($1, $2, $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ $workflow.name }}, {{ $prevNode.name }}, {{ ($json.error && $json.error.message) || 'request failed' }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1320, 560],
+      "id": "rs-error",
+      "name": "Log Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE processed_keys\nSET status = 'done',\n    updated_at = now()\nWHERE key = $1\nRETURNING key",
+        "options": {
+          "queryReplacement": "={{ $('Claim Key').first().json.key }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1540, 300],
+      "id": "rss-summary-done",
+      "name": "Mark Done",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Two jobs, both required:\n//  1. Stop the run when the key is already taken. A Postgres node that gets 0 rows emits\n//     { success: true } instead of an empty output, so filtering is what actually stops it.\n//  2. Put the original payload back. The claim node outputs the SQL row, so without this\n//     every downstream node would read fields that no longer exist.\nreturn items\n  .filter((item) => item.json && item.json.key)\n  .map((item) => ({\n    json: Object.assign({}, item.json.payload || {}, { claimKey: item.json.key }),\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300],
+      "id": "rss-summary-gate",
+      "name": "Claimed?"
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Fetch Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Feed": {
+      "main": [
+        [
+          {
+            "node": "Build Keys",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Keys": {
+      "main": [
+        [
+          {
+            "node": "Claim Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Key": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Summarize": {
+      "main": [
+        [
+          {
+            "node": "Create Notion Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Notion Page": {
+      "main": [
+        [
+          {
+            "node": "Mark Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Done": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "LLM Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {}
+}

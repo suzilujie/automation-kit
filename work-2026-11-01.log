@@ -1,0 +1,433 @@
+================================================================================
+工作日志 work-2026-11-01.log
+项目：AutomationKit（n8n 工作流模板包）
+路径：F:\ai.workspace\Wow\outwork\docs\upwork\pjc\automation-kit
+================================================================================
+
+--------------------------------------------------------------------------------
+[2026-11-01] 从零搭建 AutomationKit：Docker 编排 + 6 个模板 + 目录页 + 两份设计文档
+--------------------------------------------------------------------------------
+■ 需求来源
+  用户此前确认：「我想要实现这些项目」→「一个个来」→ 代码放
+  F:\ai.workspace\Wow\outwork\docs\upwork\pjc。
+  本轮补充要求：「确认, 同时要完善系统设计文档, 及页面设计文档」。
+
+■ 执行前置（约束清单，来自记忆）
+  1) 一键启动脚本统一命名 start（ID 10113010）→ start.ps1 + start.bat
+  2) 脚本英文、纯 ASCII、.bat 用 CRLF 且 goto 结构（ID 40279680）
+  3) 端口避开已占用（ID 44993489）→ n8n 5678、PG 5433
+  4) 改代码前先给方案等确认（ID 78425670）→ 已走 plan_create 确认流程
+  5) 每次修改记工作日志（ID 31556897）→ 本文件
+  6) HTML 规范：slate 暗色 + 右侧固定 TOC + 锚点 + 打印反色，:root 单冒号
+     （ID 27431441 / 91901826 / 67848018）
+  7) 专业名词中英对照（ID 19835779）
+  8) 时间按本地时区 UTC+8（ID 68549266）
+
+■ 环境实测
+  · node v25.4.0 / bun 1.3.11 / python 3.13.15 / git 2.25.1 可用
+  · Docker CLI 29.7.2 存在，但**引擎未运行**：
+    docker info 报 failed to connect to the docker API at
+    npipe:////./pipe/dockerDesktopLinuxEngine
+  · 端口 5678 / 5433 均空闲
+  · 本地 n8n 源码 F:\ai.workspace\Wow\outwork\docs\selfDev\n8n，
+    package.json version = 2.45.0 → 镜像 tag 定为 n8nio/n8n:2.45.0
+
+■ 新增文件（15 个）
+  根目录
+    docker-compose.yml     n8n 2.45.0 + PG 16；healthcheck；templates/sql 只读挂载
+    .env.example           环境变量样例（全占位）
+    .gitignore             忽略 .env、数据目录、*.log 但保留 work-*.log
+    start.ps1              一键启动（检查引擎 → 生成 .env → compose up → 轮询 healthy）
+    start.bat              goto 结构壳，CRLF
+    README.md              启动 / 导入 / 契约 / 边界
+  sql/
+    init.sql               processed_keys、workflow_errors、review_queue 三张表
+  templates/
+    _shared/README.md      三条工程契约的唯一来源
+    lead-routing/          workflow.json + README.md
+    support-triage/        workflow.json + README.md
+    invoice-parsing/       workflow.json + README.md
+    rss-summary/           workflow.json + README.md
+    sheets-notion-sync/    workflow.json + README.md
+    daily-digest/          workflow.json + README.md
+  site/
+    templates.html         模板目录页（给客户看）
+  docs/
+    system-design.html     系统设计文档（10 个章节）
+    page-design.html       页面设计文档（9 个章节）
+
+■ 关键设计与取舍
+  1) 用 httpRequest 调 LLM，不用 @n8n/n8n-nodes-langchain.* 节点
+     理由：LangChain 节点版本迭代快、凭证类型多，跨版本导入易失败
+  2) 错误分支用节点级 onError: continueErrorOutput，不用独立 Error Workflow
+     理由：独立 error workflow 靠 workflow ID 引用，导入客户环境后失效且静默
+  3) 幂等用 processed_keys 主键 + ON CONFLICT DO NOTHING + RETURNING
+     理由：RETURNING 冲突时返回 0 行，后续节点无输入自然停止，无需 IF；
+           Code 节点「先查再写」在并发/重试下有竞态
+  4) PG 宿主机端口 5433（容器内仍 5432）
+     理由：5432 是最常见的本地 PG 冲突点
+  5) 首批 6 个模板而非 12 个
+     理由：6 个跑通的 > 12 个没验证过的；契约固化后第二批只是复制
+
+■ 模板清单（每个均含重试 / 错误分支 / 幂等）
+    lead-routing        Webhook  → 去重 → CRM(HTTP) → Slack
+    support-triage      Webhook  → 去重 → LLM 分类 → Slack 动态频道
+    invoice-parsing     Webhook  → 去重 → PDF 转文本 → LLM 抽取 → IF 置信度 0.8
+                                   ├ 高置信 → 财务系统
+                                   └ 低置信 → review_queue
+    rss-summary         定时/时  → RSS → guid 去重 → LLM 摘要 → Notion(HTTP)
+    sheets-notion-sync  定时/15m → Google Sheets 读取 → 行号+更新时间去重 → Notion
+    daily-digest        定时/09:00 → 本地库统计 → 日期去重 → LLM 写简报 → SMTP
+
+■ 静态校验结果（已执行）
+  · 6 个 workflow.json 全部 JSON.parse 通过（0 失败）
+  · 节点类型全部为 n8n-nodes-base.* 内置节点
+  · typeVersion 对照本地 n8n 2.45.0 源码核对：
+      webhook 2（支持 1/1.1/2/2.1/2.2）
+      code 2 / rssFeedRead 1.1 / scheduleTrigger 1.2 / if 2.2 / slack 2.2
+      httpRequest 4.2 / emailSend 2.1
+      postgres 2.4（源码 defaultVersion 2.8）
+      googleSheets 4.5（源码 defaultVersion 4.7）
+  · start.ps1 与 start.bat 非 ASCII 字节数 = 0
+  · start.bat 已转为 CRLF
+
+■ 未完成的验证（重要，须补做）
+  · 镜像拉取与 docker compose 启动：未执行（Docker 引擎未运行）
+  · 6 个模板 n8n import:workflow 逐个导入：未执行
+  · Webhook 实跑 + 故意失败验证错误分支落表：未执行
+  · 节点参数在 n8n UI 中无红字：未执行（静态校验无法覆盖参数级）
+  → 结论：节点类型与版本已验证，**参数级与端到端未验证**，
+         文档中同步标注为「未验证」状态。
+
+■ 影响范围
+  · 全部为新增文件，未修改 docs/upwork 下既有 4 份文档
+    （growth-plan.html / portfolio.html / thumbnails.html / daily-routine.html）
+  · 未触碰其他项目代码
+
+■ 潜在风险
+  1) 镜像 tag 2.45.0 若在 Docker Hub 不存在，需降级为 latest（README 已注明）
+  2) Webhook 明文 HTTP，生产需前置 TLS 反代
+  3) rss-summary 采用「先占位后调用」，失败文章需人工重放（已在模板 README 写明取舍）
+  4) 6 个模板均需客户自建凭证，模板内只有占位符，无真实密钥
+  5) 工时估算与实际有偏差：本次为骨架与模板产出，尚未做端到端联调
+
+--------------------------------------------------------------------------------
+[2026-11-01] 运行时验证（用户指令「启动」）
+--------------------------------------------------------------------------------
+■ 环境问题与处置（重要，属本机环境，不进交付物）
+  1) Docker Desktop 引擎原未运行 → 启动后 docker version 返回 Server 29.7.2
+  2) 镜像拉取全部失败：
+       registry-1.docker.io  HEAD 请求 EOF
+       auth.docker.io/token  EOF
+     curl 验证：经本机代理 127.0.0.1:7897 访问 registry-1.docker.io 返回 401（可达），
+     直连返回 000（不可达）。判断为 Docker Hub 在本机网络被阻断。
+  3) 处置 A（已生效）：改写 %APPDATA%\Docker\settings-store.json，增加
+       proxyHttpMode=manual / overrideProxyHttp(s)=http://127.0.0.1:7897
+     结果：registry 可达，但 auth.docker.io 仍 EOF（代理未覆盖该域名），镜像仍拉不到。
+  4) 处置 B（最终生效）：改写 %USERPROFILE%\.docker\daemon.json，增加
+       "registry-mirrors": ["https://docker.m.daocloud.io", "https://docker.1ms.run"]
+     重启引擎后 docker info 显示两个 mirror 生效，docker pull hello-world 成功。
+  5) 两份原配置均已备份：
+       daemon.json.bak-20261101
+       settings-store.json.bak-20261101
+  6) 说明：上述改动只解决本机网络问题；海外客户直连 Docker Hub 即可，交付文档
+     按「直连优先」表述，未把加速器写进 README 的必需步骤。
+
+■ 运行时验证结果（全部实机执行）
+  · start.ps1 走完整流程：检查引擎 → 复用已有 .env → compose up → 轮询 healthy
+  · ak-n8n  Up About a minute (healthy)  0.0.0.0:5678->5678
+  · ak-postgres Up About a minute (healthy)  0.0.0.0:5433->5432
+  · 6 个模板逐个 n8n import:workflow → 每个返回「Successfully imported 1 workflow.」，6/6 成功
+  · workflow_entity 中 6 条记录，active = f（未激活，符合导入预期）
+  · sql/init.sql 生效：processed_keys / workflow_errors / review_queue 三表均存在
+    （注：n8n 自身在同一个库建了 170 张表，我们的表与之共存，互不干扰）
+  · 幂等语义实测：
+      第一次 INSERT ... ON CONFLICT DO NOTHING RETURNING key → INSERT 0 1（返回 1 行）
+      第二次相同 key                                        → INSERT 0 0（返回 0 行）
+    结论：RETURNING 冲突时返回 0 行这一机制成立，即「后续节点无输入、链路自然停止」
+  · 导入后 n8n 容器最近 10 分钟日志内无 error / warn / unknown 关键字
+
+■ 仍待完成（依赖客户/用户在 UI 中建凭证后操作）
+  · 编辑器内逐个打开模板，确认节点参数无红字
+  · 创建 Postgres / OpenAI / Slack 等凭证，激活工作流后 webhook 实跑
+  · 故意让某个 HTTP 节点失败，验证错误分支写入 workflow_errors
+
+■ 同步更新的文件
+  · docs/system-design.html：验证状态章节由「未完成」改写为
+    「已完成（运行时验证）」8 项 + 「仍待完成」3 项 + 本机环境备忘
+
+■ 影响范围
+  · 仅新增/修改 automation-kit 目录内文件与本机 Docker 配置
+  · 未修改 docs/upwork 下其他文档
+
+■ 风险提示
+  · registry-mirrors 为第三方公共服务，随时可能失效；失效后 pull 会报 EOF/超时，
+    届时更换 mirror 或改用代理即可，不影响已构建好的镜像与数据卷
+
+--------------------------------------------------------------------------------
+[2026-11-01] 数据库升到 Postgres 17（消除 n8n 兼容性告警）
+--------------------------------------------------------------------------------
+■ 触发原因
+  导入工作流时 n8n 2.45.0 日志告警：
+  "Postgres 16 is outside the supported range and receives compatibility
+   support only. Upgrade to Postgres 17 or newer."
+  PG 16 已跌出官方支持范围（supported range），继续用等于跑在兼容模式下，
+  属于交付物隐患，故升级。
+
+■ 修改文件
+  1) docker-compose.yml
+       image: postgres:16-alpine  ->  postgres:17-alpine
+       并加注释说明升级原因（注释留英文，保持文件纯 ASCII）
+  2) README.md 第 110 行目录树注释：Postgres 16 -> Postgres 17
+  3) docs/system-design.html 三处：
+       第 126 行 meta（目标运行时）
+       第 164 行 架构图文本 ak-postgres (PG 16) -> (PG 17)
+       第 446 行 footer
+  4) site/templates.html 第 160 行 meta（运行环境）
+  → 全仓库 Postgres 16 / postgres:16 / PG 16 残留 = 0（已 grep 复核，
+    仅剩 compose 注释里那句告警原文，属有意保留）
+
+■ 运行时处置（关键：大版本不能就地升级）
+  · PG 16 -> 17 数据目录不向后兼容，直接换镜像会因数据目录版本不匹配启动失败
+  · 执行 docker compose down -v --remove-orphans
+      删除 ak-n8n / ak-postgres 容器 + pg_data / n8n_data 两个卷 + 默认网络
+  · docker compose up -d 重新拉起，postgres:17-alpine 拉取成功
+    （本机已有 registry-mirrors，pull 正常）
+
+■ 验证结果（实机）
+  · ak-postgres  postgres:17-alpine  Up (healthy)  5433->5432
+  · ak-n8n       n8nio/n8n:2.45.0    Up (healthy)  5678->5678
+  · select version() -> PostgreSQL 17.11 on x86_64-pc-linux-musl (Alpine 15.2.0)
+  · n8n 启动日志："Version: 2.45.0" / "Editor is now accessible via"
+    ，全量日志中 "outside the supported range" 命中次数 = 0
+  · init.sql 在两个新卷上重新执行：processed_keys / workflow_errors /
+    review_queue 三表存在（与 n8n 自建 170 张表共存）
+  · 6 个模板重新逐个 import:workflow → 6/6 "Successfully imported 1 workflow."
+  · workflow_entity 记录数 = 6：
+      AutomationKit - Lead Routing / Support Triage / Invoice Parsing /
+      RSS Summary / Sheet to Notion Sync / Daily Digest
+
+■ 影响范围
+  · 仅 automation-kit 目录内文件与本机 Docker 卷
+  · 数据卷已重建：此前手工测试数据（幂等表测试行、导入的旧工作流记录）全部清空，
+    属预期；工作流本体是 templates/ 下的 JSON，可随时重导，无信息损失
+
+■ 潜在风险
+  1) 客户若已有 PG 16 数据卷，同样必须备份后重建（README 需在升级说明里保留此提示）
+  2) postgres:17-alpine 与 16-alpine 相比若有扩展差异，自定义扩展需另行安装；
+     本项目只用主键/唯一约束/timestamptz，不依赖扩展，无影响
+  3) 仍待完成（与上一条一致）：UI 建凭证后 webhook 实跑、故意失败验证错误分支落表
+
+--------------------------------------------------------------------------------
+[2026-11-01] 修复 Daily Digest 截图暴露的问题 + 三条契约升级到 v2 + 端到端实跑
+--------------------------------------------------------------------------------
+■ 起因
+  用户贴了 Daily Digest 的编辑器截图，画布上 Query Last 24h / Claim Today /
+  LLM Write Digest / Send Digest / Log Error 五个节点全部带红三角。
+  用户选择「C 两个都做」：先修缺陷，再预置本地凭证做端到端验证。
+
+■ 红三角的真实原因（不是逻辑坏了）
+  · 查 credentials_entity：库里只有 1 条凭证（n8n 自带的 n8n Assistant
+    model | openAiApi），Postgres / Header Auth / SMTP 一条都没有
+  · 5 个红三角节点正好是需要这三类凭证的节点；Code 与定时器节点干净
+  · n8n 导入工作流时按设计不导入凭证（与实例 N8N_ENCRYPTION_KEY 绑定），
+    所以「导入后必有红三角」是正常行为
+
+■ 实跑过程中发现的 6 个真缺陷（全部已修）
+  D1 Claim 节点没有错误分支
+     只设 retryOnFail，没有 onError: continueErrorOutput，写库失败会让整条
+     执行直接失败且不落 workflow_errors。已补错误分支 → Log Error。
+  D2 「0 行即链路自然停止」是错的（最严重）
+     实测 n8n 2.45.0 的 Postgres 节点在 SQL 返回 0 行时输出一条
+     { "success": true }，不是空输出，主链路会带着这条空数据继续跑下去。
+     之前文档与日志里的说法是推理出来的，没实测。
+     → 占位节点后新增 Code 闸门 Claimed?，过滤掉没有 key 的 item。
+  D3 失败会永久占死 key
+     ON CONFLICT DO NOTHING 让一次失败（LLM 超时 / CRM 5xx）把这个 key
+     永久占住，客户修好配置重投同一条事件毫无反应。
+     → 改为「claimed / done 两阶段 + 10 分钟租约」：
+        成功永不重发；失败 10 分钟后可被重新认领；并发重投仍被挡住。
+     → 新增成功终点节点 Mark Done，把 key 落章为 done。
+  D4 占位节点吞掉 payload
+     占位节点输出是 SQL 行（{key}），下游原本读 $json.email / $json.body
+     的节点全部拿到 undefined。
+     → RETURNING key, payload；闸门节点把 payload 还原成下游可读的 item，
+       并附带 claimKey 字段。
+  D5 workflow_errors.node 恒为 unknown
+     错误输出 item 的形状是「原始 item + error 对象」，没有 node 字段，
+     所以 ($json.node && $json.node.name) || 'unknown' 永远走兜底。
+     → 改用 $prevNode.name（已用探针工作流实测：返回真实失败节点名）。
+  D6 日报数字全是 undefined
+     Compose Facts 读的是自己的输入（占位行），不是 Query Last 24h 的结果。
+     → 改为 $('Query Last 24h').first().json。
+  D7（顺带发现）Slack 频道占位符让整条流被判 has issues
+     Slack 频道 ID 有正则校验 ^(?:[CGD][A-Z0-9]{2,}|#?[a-z0-9_\-]{2,})$，
+     占位值 YOUR_SLACK_CHANNEL_ID 不匹配，n8n 直接拒绝执行与激活，
+     连错误分支都进不去。→ 换成格式合法的 C0000000000。
+
+■ 改动文件
+  sql/init.sql
+    processed_keys 增加 status（default 'claimed'）与 updated_at；
+    并补 ALTER TABLE ... ADD COLUMN IF NOT EXISTS 作为旧库迁移兜底
+  templates/*/workflow.json（6 个）
+    Claim 节点：租约式 SQL + onError + 错误输出接 Log Error
+    新增 Claimed?（Code 闸门，过滤 + 还原 payload）
+    新增 Mark Done（UPDATE status='done'，只挂成功终点；invoice-parsing
+    两个终点 Push to Accounting / Queue for Review 都挂上了）
+    Log Error 的参数替换改用 $prevNode.name
+    daily-digest：Compose Facts 改为从 Query Last 24h 取数
+    lead-routing：Slack 频道占位改 C0000000000
+  templates/_shared/README.md
+    契约二补 $prevNode 说明与原因；契约三整节重写为「占位 / 闸门 / 收尾」
+    三节点，含四态表；命名规范增加 Claimed? 与 Mark Done；凭证节说明
+    Slack 占位符为何不能用 YOUR_SLACK_CHANNEL_ID
+  README.md
+    三条契约表与数据表说明同步 v2（status/租约/闸门/落章）
+  docs/system-design.html
+    数据模型补 status/updated_at 与租约说明；契约章节补三条实测修正；
+    验证状态章节改写为真实 E2E 结果 + 明确剩余未验证项；
+    排查 SQL 增加「只让租约过期」的重发方式
+  site/templates.html
+    幂等契约卡片文案同步
+
+■ 端到端实跑（本机，非交付内容）
+  为驱动 CLI 执行，临时做了仅本地使用的演示副本（放在 %TEMP%\ak-demo，
+  不进仓库）：给 Postgres 节点挂上演示凭证，给 daily-digest / lead-routing
+  加手动触发器（daily-digest 的还带一个假 webhook body 的 Code 节点）。
+  凭证通过 n8n import:credentials 导入（明文 data 会被自动加密，源码
+  packages/cli/src/commands/import/credentials.ts:499-502 确认）。
+
+  踩到的执行环境坑（记录备查）：
+  · n8n execute 需要「起始节点」，scheduleTrigger 不行 → 用 manualTrigger
+  · 主实例占用 task broker 5679，CLI 会 EADDRINUSE 直接 process.exit(1)
+    （源码 task-broker-server.ts:134-141）→ 用 -e N8N_RUNNERS_BROKER_PORT=5699
+  · PowerShell 传双引号会被吞，带引号的 SQL 列名改为 SQL 文件 + psql -f
+
+  验证结果：
+  · 冒烟工作流（Manual → Claim → Claimed? → Mark Done）
+      首跑：status=done，updated_at 刷新
+      二跑：lastNodeExecuted=Claimed?，Mark Done 未执行，updated_at 不变
+      租约回拨 11 分钟后三跑：重新认领并再次落 done
+  · Daily Digest 实跑
+      Query Last 24h 返回真实计数；Claim Today 拿到 key；闸门放行；
+      Compose Facts 输出真实数字；LLM 无凭证 → 错误分支 →
+      workflow_errors 新增 1 行（node=LLM Write Digest）；key 停在 claimed
+      立即二跑被闸门挡下（不会重复发信）
+  · Lead Routing 实跑
+      claim key = demo@example.com::cli（payload 还原有效）
+      Push to CRM 域名不存在 → 错误落表 node=Push to CRM，
+      message=getaddrinfo ENOTFOUND your_crm_domain；key 停在 claimed
+
+■ 影响范围
+  · 仅 automation-kit 目录内 6 个模板、init.sql、3 份文档与 1 个站点页
+  · 本机演示库的数据卷重建过两次（PG 17 升级 + 新 init.sql），
+    工作流本体在 templates/ 下，可随时重导，无信息损失
+  · 未修改 docs/upwork 下其他文档
+
+■ 潜在风险
+  1) 客户若已用旧版 init.sql 建过库，需要执行 README 里的 ALTER（或重建卷），
+     否则 claim SQL 会因为缺少 status 列而报错
+  2) 10 分钟租约是写死的常量：若某个模板单次运行超过 10 分钟，
+     可能出现同一事件被并发处理；这 6 个模板都是短链路，暂不参数化
+  3) 真实第三方写入（Slack / Notion / SMTP / CRM）与真实 HTTP 入口仍未验证，
+     验证过的是「失败被正确捕获并留痕」
+  4) 本地演示凭证与演示副本只在 %TEMP% 与本机库里，交付包内没有任何凭证
+
+--------------------------------------------------------------------------------
+[2026-11-01] 补齐最后一项验证：真实 Webhook 投递
+--------------------------------------------------------------------------------
+■ 目标
+  之前所有执行都是 `n8n execute` 手动触发，没走 HTTP 入口。本机补一次
+  POST /webhook/lead-routing，验证「激活 → 注册 → 收请求 → 落库」全链路。
+
+■ 卡点：n8n 2.x 的激活不是一个布尔字段
+  只 update workflow_entity set active = true 之后重启，Webhook 仍然是
+  404 "The requested webhook \"POST lead-routing\" is not registered"。
+  原因：2.x 引入版本化，光有 active=true 不够，还必须让
+  activeVersionId 指向已发布版本（本例直接取其 versionId）。
+  两个字段一起改并重启容器，ActiveWorkflowManager 才会注册 Webhook。
+  → 客户在编辑器里点开关时 n8n 会一并处理，只有脚本改库才会踩到这个坑。
+
+■ 验证结果
+  1) POST /webhook/lead-routing  body {email:webhook@example.com, source:website}
+     → HTTP 200 {"message":"Workflow was started"}
+     → execution_entity: mode=webhook, status=success
+     → processed_keys 新增 webhook@example.com::website / claimed
+     → workflow_errors 新增 1 行：node=Push to CRM,
+       message=getaddrinfo ENOTFOUND your_crm_domain
+  2) 同一 body 再投一次
+     → 仍然 HTTP 200（webhook 是异步应答，不代表业务执行了）
+     → 但 processed_keys.updated_at 没变、workflow_errors 没增加
+     → 说明第二次在 Claimed? 闸门处停下，没有二次写 CRM
+
+■ 同步更新
+  · docs/system-design.html：验证状态新增「真实 Webhook 投递」「Webhook 层
+    幂等」两行通过；仍待完成只剩「真实第三方写入」与「UI 参数红字」；
+    结论卡片改写；新增一条 n8n 2.x 激活机制运维备忘
+
+■ 影响范围
+  · 仅本机演示实例（lead-routing 目前是激活状态）与系统设计文档
+  · 交付包内模板文件未变
+
+■ 风险提示
+  · lead-routing 现在处于激活状态且挂的是占位 CRM 地址，任何打到
+    /webhook/lead-routing 的请求都会失败并写 workflow_errors；
+    做完演示建议在 UI 里关掉，或直接 docker compose down
+
+--------------------------------------------------------------------------------
+[2026-11-01] 新增《可靠性保障》文档 docs/reliability.html
+--------------------------------------------------------------------------------
+■ 需求来源
+  用户在讨论「怎样让（AI 生成的）工作流真正跑得稳」之后要求「画个图」，
+  看到四张文字图后说「写进文档吧」→ 落成正式文档，而不是留在对话里。
+  需求原文：「写进文档吧」
+
+■ 新增文件
+  docs/reliability.html
+    单文件静态页，8 个章节 + 右侧固定 TOC + 锚点 + 滚动高亮 + 打印反色：
+      1) why        为什么单独讲可靠性（含本轮 6 个缺陷与"读代码能否发现"）
+      2) layers     四层防线 L1-L4 分层图 + 每层拦住什么
+      3) skeleton   模板固定骨架字符图 + 三个出口的分工表
+      4) cases      5 个实跑用例 + 断言 + 本机结果 + 真实 SQL 证据
+      5) mapping    失败类型 → 拦截层 → 成本 → 漏掉的后果
+      6) static     12 项静态断言清单（不启动 n8n 也能查）
+      7) observability 失败必须留的四个字段 + 客户自查 SQL + 日报口径
+      8) limits     边界与已知限制（租约常量、第三方写入未验证等）
+    设计沿用 system-design.html 的 CSS 变量与 TOC 脚本；新增两个图表组件：
+      · .stack / .layer / .arrow  纯 CSS 分层方框（L1 蓝 / L2 青 / L3 绿 / L4 橙）
+      · pre.fig                    等宽字符图，保证打印还原
+    不引 CDN、不引 mermaid：离线可渲染、可打印是硬要求。
+
+■ 修改文件
+  README.md
+    目录树补一行 docs/reliability.html（含一句内容摘要）
+  docs/system-design.html
+    验证状态章节末尾新增「配套文档」卡片，用相对链接指向
+    reliability.html，并声明分工：系统设计讲"设计成什么样"，
+    可靠性保障讲"凭什么说它一直跑得对"
+  work-2026-11-01.log
+    本节
+
+■ 内容准确性
+  文档中的数字与结论全部来自本日实跑，未新增任何未验证的说法：
+  · workflow_errors 中 node = Push to CRM、message = getaddrinfo ENOTFOUND
+    your_crm_domain
+  · processed_keys 的 claimed / done 状态与 10 分钟租约
+  · Webhook 投递 200 {"message":"Workflow was started"}，mode = webhook
+  · 6 个缺陷清单与 12 项静态断言的检查项
+  未验证项已在 limits 章节显式标注为「未验证」，不混写。
+
+■ 影响范围
+  · 仅新增 1 个文档 + 2 处索引 + 本节日志
+  · 未改动 templates/*/workflow.json、sql/init.sql、docker-compose.yml、
+    start.ps1、start.bat，交付包行为零变化
+
+■ 潜在风险
+  1) 新增一份文档意味着以后改契约时要同步两处（system-design 与
+     reliability）。缓解：reliability 只写机制与验证方法，不复制数据模型
+     与决策记录，契约细节唯一来源仍是 templates/_shared/README.md
+  2) 12 项静态断言目前是文字清单，脚本仍是 %TEMP% 里的临时文件（未入库）。
+     文档与脚本可能漂移；若要做成正式校验工具，需另行开工
+  3) 文档中的"本机结果"是单机单次验证，不等于客户环境结论
+
+================================================================================

@@ -1,0 +1,271 @@
+{
+  "name": "AutomationKit - Support Triage",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Support Triage\n\nWebhook -> dedupe -> LLM classify -> Slack channel.\n\n**Duplicate protection**: one ticketId is processed once (processed_keys).\n\n**Failure behaviour**: the LLM call retries 3 times. If it still fails, the error branch logs to workflow_errors and the ticket is NOT posted to Slack - so nothing is silently dropped.\n\n**Before activating**: set a Postgres credential, a DeepSeek credential (Header Auth) on `LLM Classify`, and a Slack credential on `Post to Channel`.",
+        "height": 260,
+        "width": 430,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-260, 40],
+      "id": "st-sticky",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-triage",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "id": "st-webhook",
+      "name": "Ticket In",
+      "webhookId": "support-triage"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a stable dedupe key from the ticket id, and keep the raw text for the LLM.\nreturn items.map((item) => {\n  const body = item.json.body || item.json;\n  const ticketId = String(body.ticketId || body.id || '').trim();\n  const text = String(body.text || body.message || '').trim();\n\n  if (!ticketId) {\n    throw new Error('Missing ticketId - cannot dedupe this ticket');\n  }\n  if (!text) {\n    throw new Error('Missing text - nothing to classify');\n  }\n\n  return {\n    json: {\n      eventId: ticketId,\n      ticketId,\n      text,\n      customerEmail: body.email || '',\n      receivedAt: new Date().toISOString(),\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "id": "st-normalise",
+      "name": "Normalise Ticket"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO processed_keys (key, workflow, payload, status)\nVALUES ($1, $2, $3::jsonb, 'claimed')\nON CONFLICT (key) DO UPDATE\n  SET status = 'claimed',\n      updated_at = now()\n  WHERE processed_keys.status <> 'done'\n    AND processed_keys.updated_at < now() - interval '10 minutes'\nRETURNING key, payload",
+        "options": {
+          "queryReplacement": "={{ $json.eventId }}, {{ $workflow.name }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [440, 300],
+      "id": "st-claim",
+      "name": "Claim Key",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'deepseek-chat', temperature: 0, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: 'You classify support tickets. Return JSON only with keys: category (one of billing, bug, howto, other), priority (one of p1, p2, p3), summary (max 20 words), suggested_reply (max 60 words, in the language of the ticket).' }, { role: 'user', content: $json.text } ] }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "id": "st-llm",
+      "name": "LLM Classify",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the model output and pick the target Slack channel.\n// Bad or partial JSON never breaks the run: it falls back to category 'other'.\nconst ALLOWED = ['billing', 'bug', 'howto', 'other'];\n\nreturn items.map((item) => {\n  const choice = item.json.choices && item.json.choices[0];\n  const raw = choice && choice.message ? choice.message.content : '{}';\n\n  let parsed = {};\n  try {\n    parsed = JSON.parse(raw);\n  } catch (e) {\n    parsed = {};\n  }\n\n  const ticket = $('Normalise Ticket').item.json;\n  const category = ALLOWED.indexOf(parsed.category) >= 0 ? parsed.category : 'other';\n\n  return {\n    json: {\n      ticketId: ticket.ticketId,\n      text: ticket.text,\n      category,\n      priority: parsed.priority || 'p3',\n      summary: parsed.summary || '',\n      suggestedReply: parsed.suggested_reply || '',\n      channelName: 'support-' + category,\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300],
+      "id": "st-parse",
+      "name": "Route"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $json.channelName }}",
+          "mode": "name"
+        },
+        "text": "=*[{{ $json.priority }}] {{ $json.category }}* — {{ $json.summary }}\nTicket: {{ $json.ticketId }}\n\nSuggested reply:\n{{ $json.suggestedReply }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1320, 300],
+      "id": "st-slack",
+      "name": "Post to Channel",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_errors (workflow, node, message, payload)\nVALUES ($1, $2, $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ $workflow.name }}, {{ $prevNode.name }}, {{ ($json.error && $json.error.message) || 'request failed' }}, {{ JSON.stringify($json) }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1320, 560],
+      "id": "st-error",
+      "name": "Log Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE processed_keys\nSET status = 'done',\n    updated_at = now()\nWHERE key = $1\nRETURNING key",
+        "options": {
+          "queryReplacement": "={{ $('Claim Key').first().json.key }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1540, 300],
+      "id": "support-triage-done",
+      "name": "Mark Done",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Two jobs, both required:\n//  1. Stop the run when the key is already taken. A Postgres node that gets 0 rows emits\n//     { success: true } instead of an empty output, so filtering is what actually stops it.\n//  2. Put the original payload back. The claim node outputs the SQL row, so without this\n//     every downstream node would read fields that no longer exist.\nreturn items\n  .filter((item) => item.json && item.json.key)\n  .map((item) => ({\n    json: Object.assign({}, item.json.payload || {}, { claimKey: item.json.key }),\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "id": "support-triage-gate",
+      "name": "Claimed?"
+    }
+  ],
+  "connections": {
+    "Ticket In": {
+      "main": [
+        [
+          {
+            "node": "Normalise Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Ticket": {
+      "main": [
+        [
+          {
+            "node": "Claim Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Key": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Classify": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Post to Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to Channel": {
+      "main": [
+        [
+          {
+            "node": "Mark Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Done": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "LLM Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {}
+}
